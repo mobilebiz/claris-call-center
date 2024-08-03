@@ -1,15 +1,15 @@
 project:
-    name: helloworld
+  name: helloworld
 instance:
-    name: dev
-    runtime: nodejs18
-    region: aws.euw1
-    application-id: 74c77d05-d2b0-49a5-91a1-c06885f7acf9
-    build-script: "./build.sh"
-    entrypoint: [npm, run, start]
-    environment:
-        - name: ENV_VAR
-          value: "helloworld"
+  name: dev
+  runtime: nodejs18
+  region: aws.apse1
+  application-id: f4602044-3731-4770-b7c5-d93fe0d9df81
+  build-script: "./build.sh"
+  entrypoint: [npm, run, start]
+  environment:
+    - name: ENV_VAR
+      value: "helloworld"
 debug:
-    name: debug
-    entrypoint: [nodemon, --inspect, index.js]
+  name: debug
+  entrypoint: [nodemon, --inspect, index.js]
