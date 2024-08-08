@@ -69,6 +69,7 @@ app.get('/getToken', async (req, res, next) => {
 // 着信のイベントハンドラ
 app.post('/onCall', async (req, res, next) => {
     console.log(`🐞 onCall called.`);
+    console.dir(req.body);
     try {
         res.json([
             {
