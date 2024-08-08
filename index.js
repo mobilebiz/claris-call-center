@@ -36,11 +36,11 @@ app.get('/_/metrics', async (req, res) => {
 app.get('/getToken', async (req, res, next) => {
     try {
         let user;
-        // 電話番号の取得
-        const number = req.query.number || '0312345678';
+        // オペレーター名の取得
+        const name = req.query.name || 'Operator';
         try {
             // すでにユーザーが存在するかを確認
-            const users = await vonage.users.getUserPage({name: number});
+            const users = await vonage.users.getUserPage({name});
             // 既存ユーザーを流用
             user = users._embedded.users[0]
         } catch (e) {
@@ -48,9 +48,9 @@ app.get('/getToken', async (req, res, next) => {
             // ユーザーの新規作成
             user = await vonage.users.createUser(
                 {
-                    id: number,
-                    name: number,
-                    displayName: number
+                    id: name,
+                    name,
+                    displayName: name
                 }
             );
         }

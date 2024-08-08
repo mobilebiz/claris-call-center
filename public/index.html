@@ -21,6 +21,7 @@
     let btnCall;
     let btnHangup;
     let currentCall;
+    let operatorName = 'Operator';  // オペレーター名
 
     // ページのロードが完了したとき
     window.onload = async () => {
@@ -48,7 +49,7 @@
         btnCall.disabled = true;
         btnCall.innerHTML = '準備中...';
         // JWTの取得
-        const response = await fetch(`./getToken?number=${phone}`);
+        const response = await fetch(`./getToken?name=${operatorName}`);
         const data = await response.json();
         const jwt = data.jwt;
         initSDK(jwt);
