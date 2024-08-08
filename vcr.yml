@@ -8,8 +8,8 @@ instance:
   build-script: "./build.sh"
   entrypoint: [npm, run, start]
   environment:
-    - name: ENV_VAR
-      value: "helloworld"
+    - name: VONAGE_NUMBER
+      value: "12053604574"
 debug:
   name: debug
   entrypoint: [nodemon, --inspect, index.js]

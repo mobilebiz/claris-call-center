@@ -1,12 +1,140 @@
 <!DOCTYPE html>
-<html lang = "en">
-  <head>
-    <meta charset = "UTF-8">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-GLhlTQ8iRABdZLl6O3oVMWSktQOp6b7In1Zl3/Jr59b6EGGoI1aFkw7cmDA6j6gD" crossorigin="anonymous">
-    <link rel="stylesheet" href="styles.css">
-    <title> VCR Static Site </title>
-  </head>
-  <body class="center">
-    <h1> Hello Claris </h1>
-  </body>
+<html">
+<head>
+  <meta http-equiv="Content-Type" content="application/xhtml+xml; charset=UTF-8" />
+  <!-- ******* Load vonageClientSDK from a CDN ****** -->
+  <script src="https://cdn.jsdelivr.net/npm/@vonage/client-sdk@latest/dist/vonageClientSDK.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        spacing: {
+          '1': '8px',
+          '2': '12px'
+        }
+      }
+    }
+  </script>
+  <script type="text/javascript">
+    const client = new vonageClientSDK.VonageClient();
+    let phone = '';
+    let btnCall;
+    let btnHangup;
+    let currentCall;
+
+    // ページのロードが完了したとき
+    window.onload = async () => {
+      btnCall = document.getElementById('btnCall');
+      btnHangup = document.getElementById('btnHangup');
+
+      console.log(`🐞 Get query parameters`)
+      try {
+        // クエリーパラメータを取得
+        let params = new URLSearchParams(decodeURI(location.search))
+        params.forEach((value, key) => {
+          if (key === 'number') {
+          // phoneの先頭が0の場合は、81に変換
+            phone = value.startsWith('0') ? '81' + value.slice(1) : value;
+          }
+        })
+        console.log(`🐞 ${phone}`);
+      } catch (error) {
+        console.error(`🐞 Error: ${error.message}`)                  
+      }
+    }
+
+    async function phoneCall() {
+      try {
+        btnCall.disabled = true;
+        btnCall.innerHTML = '準備中...';
+        // JWTの取得
+        const response = await fetch(`./getToken?number=${phone}`);
+        const data = await response.json();
+        const jwt = data.jwt;
+        initSDK(jwt);
+      } catch (error) {
+        btnCall.disabled = false;
+        btnCall.innerHTML = '発信';
+        console.error(`🐞 Error: ${error.message}`)        
+      }
+    }
+
+		async function hangup() {
+      try {
+        btnHangup.disabled = true;
+        btnHangup.innerHTML = '切断中...';
+        client.hangup(currentCall).then(() => {
+          console.log('Call ended');
+          btnCall.hidden = false;
+          btnHangup.hidden = true;
+          btnHangup.disabled = false;
+        }).catch((error) => {
+          throw error;
+        });
+      } catch (error) {
+        btnHangup.disabled = false;
+        btnHangup.innerHTML = '切断';
+        btnHangup.hidden = false;
+        console.error(`🐞 Error: ${error.message}`)        
+      }
+    }
+
+    function initSDK(jwt) {
+      // セッションの作成
+      client.createSession(jwt).then(sessionId => {
+        console.log("🐞 Connected");
+
+        // コールステータスのイベントリスナー
+        client.on('legStatusUpdate', (callId, legId, status) => {
+          console.log(`🐞 Leg status update: ${status}`);
+          if (status === 'RINGING') { // 呼び出し中
+            btnCall.hidden = true;
+            btnHangup.innerHTML = '呼び出し中...';
+            btnHangup.hidden = false;
+          }
+          if (status === 'ANSWERED') {  // 相手が応答した
+            btnHangup.innerHTML = '切断';
+          }
+          if (status === 'COMPLETED') { // 通話が終了
+            btnCall.disabled = false;
+            btnCall.innerHTML = '発信';
+            btnCall.hidden = false;
+            btnHangup.hidden = true;
+            btnHangup.innerHTML = '切断';
+          }
+        });
+
+        // 通話が切断されたときのイベントリスナー
+        client.on('callHangup', (callId, callQuality, reason) => {
+          console.log('🐞 Call ended');
+          btnCall.disabled = false;
+          btnCall.innerHTML = '発信';
+          btnCall.hidden = false;
+          btnHangup.hidden = true;
+          btnHangup.innerHTML = '切断';
+        });
+
+        // 電話番号を指定して発信
+        client.serverCall({ to: phone }).then((callId) => {
+          console.log('🐞 Calling ...');
+          btnCall.innerHTML = '発信中...';
+          currentCall = callId;
+        }).catch((error) => {
+          throw error;
+        });
+      }).catch((error) =>{
+          btnCall.disabled = false;
+          btnCall.innerHTML = '発信';
+          console.log(error);
+      });
+    }
+
+    </script>
+</head>
+<body class="center">
+  <div class="m-0">
+  	<button id="btnCall" class="text-white font-bold bg-blue-400 p-2 rounded" onclick="phoneCall()">発信</button>
+  	<button id="btnHangup" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="hangup()">切断</button>
+  </div>
+</body>
 </html>
