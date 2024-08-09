@@ -68,19 +68,32 @@ app.get('/getToken', async (req, res, next) => {
 
 // 着信のイベントハンドラ
 app.post('/onCall', async (req, res, next) => {
-    console.log(`🐞 onCall called.`);
+    console.log(`🐞 onCall called via ${req.body.from ? req.body.from : req.body.from_user}`);
     console.dir(req.body);
     try {
-        res.json([
-            {
-                action: 'connect',
-                from: process.env.VONAGE_NUMBER,
-                endpoint: [{
-                    type: 'phone',
-                    number: req.body.to
-                }]
-            }
-        ]);
+        if (req.body.from) { // PSTN経由の着信
+            res.json([
+                {
+                    action: 'connect',
+                    from: req.body.from,
+                    endpoint: [{
+                        type: 'app',
+                        user: 'Operator' 
+                    }]
+                }
+            ]);            
+        } else {
+            res.json([
+                {
+                    action: 'connect',
+                    from: process.env.VONAGE_NUMBER,
+                    endpoint: [{
+                        type: 'phone',
+                        number: req.body.to
+                    }]
+                }
+            ]);            
+        }
     } catch (e) {
         next(e);
     }

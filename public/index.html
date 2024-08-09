@@ -16,74 +16,32 @@
     }
   </script>
   <script type="text/javascript">
-    const client = new vonageClientSDK.VonageClient();
     let phone = '';
     let btnCall;
     let btnHangup;
     let currentCall;
     let operatorName = 'Operator';  // オペレーター名
-
+    const client = new vonageClientSDK.VonageClient();
+    
     // ページのロードが完了したとき
     window.onload = async () => {
       btnCall = document.getElementById('btnCall');
+      btnInvite = document.getElementById('btnInvite');
       btnHangup = document.getElementById('btnHangup');
-
-      console.log(`🐞 Get query parameters`)
+      
       try {
-        // クエリーパラメータを取得
-        let params = new URLSearchParams(decodeURI(location.search))
-        params.forEach((value, key) => {
-          if (key === 'number') {
-          // phoneの先頭が0の場合は、81に変換
-            phone = value.startsWith('0') ? '81' + value.slice(1) : value;
-          }
-        })
-        console.log(`🐞 ${phone}`);
-      } catch (error) {
-        console.error(`🐞 Error: ${error.message}`)                  
-      }
-    }
-
-    async function phoneCall() {
-      try {
-        btnCall.disabled = true;
-        btnCall.innerHTML = '準備中...';
         // JWTの取得
         const response = await fetch(`./getToken?name=${operatorName}`);
         const data = await response.json();
         const jwt = data.jwt;
-        initSDK(jwt);
-      } catch (error) {
-        btnCall.disabled = false;
-        btnCall.innerHTML = '発信';
-        console.error(`🐞 Error: ${error.message}`)        
-      }
-    }
-
-		async function hangup() {
-      try {
-        btnHangup.disabled = true;
-        btnHangup.innerHTML = '切断中...';
-        client.hangup(currentCall).then(() => {
-          console.log('Call ended');
-          btnCall.hidden = false;
-          btnHangup.hidden = true;
-          btnHangup.disabled = false;
-        }).catch((error) => {
-          throw error;
-        });
-      } catch (error) {
-        btnHangup.disabled = false;
-        btnHangup.innerHTML = '切断';
-        btnHangup.hidden = false;
-        console.error(`🐞 Error: ${error.message}`)        
-      }
-    }
-
-    function initSDK(jwt) {
-      // セッションの作成
-      client.createSession(jwt).then(sessionId => {
-        console.log("🐞 Connected");
+  
+        // セッションの作成
+        client.createSession(jwt)
+          .then(sessionId => {
+            console.log("🐞 Session created.");
+          }).catch(error => {
+            throw error;
+          });
 
         // コールステータスのイベントリスナー
         client.on('legStatusUpdate', (callId, legId, status) => {
@@ -115,6 +73,37 @@
           btnHangup.innerHTML = '切断';
         });
 
+        // 着信したときのイベントリスナー
+        client.on('callInvite', (callId) => {
+          console.log(`🐞 Incoming call.`)
+          currentCall = callId;
+          btnCall.disabled = true;
+          btnCall.hidden = true;
+          btnInvite.disabled = false;
+          btnInvite.hidden = false;
+        });
+        
+        // クエリーパラメータを取得
+        console.log(`🐞 Get query parameters`)
+        let params = new URLSearchParams(decodeURI(location.search))
+        params.forEach((value, key) => {
+          if (key === 'number') {
+            // phoneの先頭が0の場合は、81に変換
+            phone = value.startsWith('0') ? '81' + value.slice(1) : value;
+          }
+        })
+        console.log(`🐞 ${phone}`);
+
+      } catch (error) {
+        console.error(`🐞 Error: ${error.message}`)                  
+      }
+    }
+
+    async function phoneCall() {
+      try {
+        btnCall.disabled = true;
+        btnCall.innerHTML = '準備中...';
+
         // 電話番号を指定して発信
         client.serverCall({ to: phone }).then((callId) => {
           console.log('🐞 Calling ...');
@@ -123,18 +112,57 @@
         }).catch((error) => {
           throw error;
         });
-      }).catch((error) =>{
-          btnCall.disabled = false;
-          btnCall.innerHTML = '発信';
-          console.log(error);
-      });
+
+      } catch (error) {
+        btnCall.disabled = false;
+        btnCall.innerHTML = '発信';
+        console.error(`🐞 Error: ${error.message}`)        
+      }
     }
 
-    </script>
+		async function invite() {
+      try {
+        btnInvite.disabled = true;
+        client.answer(currentCall).then(() => {
+          console.log('Call answered');
+          btnInvite.hidden = true;
+          btnHangup.hidden = false;
+          btnHangup.disabled = false;
+        }).catch((error) => {
+          throw error;
+        });
+      } catch (error) {
+        btnInvite.disabled = false;
+        btnInvite.hidden = true;
+        console.error(`🐞 Error: ${error.message}`)        
+      }
+    }
+
+		async function hangup() {
+      try {
+        btnHangup.disabled = true;
+        btnHangup.innerHTML = '切断中...';
+        client.hangup(currentCall).then(() => {
+          console.log('Call ended');
+          btnCall.hidden = false;
+          btnHangup.hidden = true;
+          btnHangup.disabled = false;
+        }).catch((error) => {
+          throw error;
+        });
+      } catch (error) {
+        btnHangup.disabled = false;
+        btnHangup.innerHTML = '切断';
+        btnHangup.hidden = false;
+        console.error(`🐞 Error: ${error.message}`)        
+      }
+    }
+  </script>
 </head>
 <body class="center">
   <div class="m-0">
   	<button id="btnCall" class="text-white font-bold bg-blue-400 p-2 rounded" onclick="phoneCall()">発信</button>
+  	<button id="btnInvite" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="invite()">着信中...</button>
   	<button id="btnHangup" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="hangup()">切断</button>
   </div>
 </body>
