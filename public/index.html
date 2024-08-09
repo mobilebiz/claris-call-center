@@ -22,7 +22,7 @@
     let currentCall;
     let operatorName = 'Operator';  // オペレーター名
     const client = new vonageClientSDK.VonageClient();
-    
+    const ringtone = new Audio('./ringtone.mp3'); // 着信音のファイルパスを指定     
     // ページのロードが完了したとき
     window.onload = async () => {
       btnCall = document.getElementById('btnCall');
@@ -81,6 +81,7 @@
           btnCall.hidden = true;
           btnInvite.disabled = false;
           btnInvite.hidden = false;
+          ringtone.play();  // 着信音を再生
         });
         
         // クエリーパラメータを取得
@@ -123,6 +124,8 @@
 		async function invite() {
       try {
         btnInvite.disabled = true;
+        ringtone.pause();  // 着信音を停止
+        ringtone.currentTime = 0; // 再生位置をリセット
         client.answer(currentCall).then(() => {
           console.log('Call answered');
           btnInvite.hidden = true;
