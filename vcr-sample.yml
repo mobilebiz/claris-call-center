@@ -1,0 +1,22 @@
+project:
+  name: Claris Click Dialer
+instance:
+  name: dev
+  runtime: nodejs18
+  region: aws.apse1
+  application-id: XXXXXXXXXX
+  build-script: "./build.sh"
+  entrypoint:
+    - node
+    - index.js
+  capabilities:
+    - voice
+  environment:
+    - name: VONAGE_NUMBER
+      value: "120XXXXXXXX"
+debug:
+  name: debug
+  entrypoint:
+    - nodemon
+    - --inspect
+    - index.js
