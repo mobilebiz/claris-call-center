@@ -99,6 +99,7 @@ app.post('/onCall', async (req, res, next) => {
     }
 });
 
+// イベント発生時のイベントハンドラー
 app.post('/onEvent', async (req, res, next) => {
     try {
         console.log('🐞 event status is: ', req.body.status);
@@ -109,6 +110,7 @@ app.post('/onEvent', async (req, res, next) => {
     }
 });
 
+// JWTの生成
 function generateJWT(username) {
     const nowTime = Math.round(new Date().getTime() / 1000);
     const aclPaths = {

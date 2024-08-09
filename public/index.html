@@ -22,7 +22,8 @@
     let currentCall;
     let operatorName = 'Operator';  // オペレーター名
     const client = new vonageClientSDK.VonageClient();
-    const ringtone = new Audio('./ringtone.mp3'); // 着信音のファイルパスを指定     
+    const ringtone = new Audio('./ringtone.mp3'); // 着信音のファイルパスを指定   
+      
     // ページのロードが完了したとき
     window.onload = async () => {
       btnCall = document.getElementById('btnCall');
