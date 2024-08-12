@@ -1,5 +1,5 @@
 project:
-  name: Claris Click Dialer
+  name: Click Call
 instance:
   name: dev
   runtime: nodejs18
