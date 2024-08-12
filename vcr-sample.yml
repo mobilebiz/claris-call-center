@@ -3,7 +3,7 @@ project:
 instance:
   name: dev
   runtime: nodejs18
-  region: aws.apse1
+  region: aws.use1
   application-id: XXXXXXXXXX
   build-script: "./build.sh"
   entrypoint:
