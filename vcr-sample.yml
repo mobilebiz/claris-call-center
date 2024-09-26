@@ -4,7 +4,7 @@ instance:
   name: dev
   runtime: nodejs18
   region: aws.use1
-  application-id: XXXXXXXXXX
+  application-id: a31989b0-a09d-4472-a968-ef209bebb501
   build-script: "./build.sh"
   entrypoint:
     - node
