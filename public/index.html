@@ -20,7 +20,7 @@
     let btnCall;
     let btnHangup;
     let currentCall;
-    let operatorName = 'Operator';  // オペレーター名
+    let operatorId = '';  // オペレーターID
     const client = new vonageClientSDK.VonageClient();
     const ringtone = new Audio('./ringtone.mp3'); // 着信音のファイルパスを指定   
       
@@ -31,6 +31,19 @@
       btnHangup = document.getElementById('btnHangup');
       
       try {
+        // クエリーパラメータ（OperatorId）を取得
+        console.log(`🐞 Get query parameters`)
+        let params = new URLSearchParams(decodeURI(location.search))
+        params.forEach((value, key) => {
+          if (key === 'operatorId') {
+            operatorId = value;
+          }
+        })
+        if (operatorId === '') {
+          throw new Error('Operator ID is not set.');
+        }
+        console.log(`🐞 ${operatorId}`);
+
         // JWTの取得
         const response = await fetch(`./getToken?name=${operatorName}`);
         const data = await response.json();
@@ -85,17 +98,6 @@
           ringtone.play();  // 着信音を再生
         });
         
-        // クエリーパラメータを取得
-        console.log(`🐞 Get query parameters`)
-        let params = new URLSearchParams(decodeURI(location.search))
-        params.forEach((value, key) => {
-          if (key === 'number') {
-            // phoneの先頭が0の場合は、81に変換
-            phone = value.startsWith('0') ? '81' + value.slice(1) : value;
-          }
-        })
-        console.log(`🐞 ${phone}`);
-
       } catch (error) {
         console.error(`🐞 Error: ${error.message}`)                  
       }
@@ -165,7 +167,7 @@
 </head>
 <body class="center">
   <div class="m-0">
-  	<button id="btnCall" class="text-white font-bold bg-blue-400 p-2 rounded" onclick="phoneCall()">発信</button>
+  	<button id="btnCall" class="text-white font-bold bg-blue-400 p-2 rounded" hidden onclick="phoneCall()">発信</button>
   	<button id="btnInvite" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="invite()">着信中...</button>
   	<button id="btnHangup" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="hangup()">切断</button>
   </div>
