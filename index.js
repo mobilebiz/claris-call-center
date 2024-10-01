@@ -1,9 +1,12 @@
 import { Voice, vcr } from '@vonage/vcr-sdk';
 import { Vonage } from '@vonage/server-sdk';
 import express from 'express';
+import expressWs from 'express-ws';
 import cors from 'cors';
 
 const app = express();
+const router = express.Router();
+expressWs(router);
 const port = process.env.VCR_PORT;
 const vonage = new Vonage(
     {
@@ -131,6 +134,16 @@ function generateJWT(username) {
         return vcr.createVonageToken({ exp: nowTime + 86400 });
     }
 }
+
+router.ws('/test', (ws, req) => {
+    ws.send('Connected');
+    console.log(`🐞 ws connected`);
+    // クライアントからのメッセージを受信したら、そのまま返す
+    ws.on('message', (msg) => {
+        console.log(`🐞 ws received: ${msg}`);
+        ws.send(msg);
+    });
+});
 
 app.listen(port, () => {
     console.log(`Example app listening on port ${port}`);
