@@ -20,7 +20,7 @@
     let btnCall;
     let btnHangup;
     let currentCall;
-    let operatorId = '';  // オペレーターID
+    let userId = '';  // オペレーターID
     const client = new vonageClientSDK.VonageClient();
     const ringtone = new Audio('./ringtone.mp3'); // 着信音のファイルパスを指定   
       
@@ -35,17 +35,21 @@
         console.log(`🐞 Get query parameters`)
         let params = new URLSearchParams(decodeURI(location.search))
         params.forEach((value, key) => {
-          if (key === 'operatorId') {
-            operatorId = value;
+          if (key === 'userId') {
+            userId = value;
+          }
+          if (key === 'phone') {
+            // valueの先頭１文字が「0」の場合は'+81'に変換
+            phone = value.charAt(0) === '0' ? '+81' + value.slice(1) : value;
           }
         })
-        if (operatorId === '') {
-          throw new Error('Operator ID is not set.');
+        if (userId === '') {
+          throw new Error('userId is not set.');
         }
-        console.log(`🐞 ${operatorId}`);
+        console.log(`🐞 userId: ${userId} phone: ${phone}`);
 
         // JWTの取得
-        const response = await fetch(`./getToken?name=${operatorName}`);
+        const response = await fetch(`./getToken?name=${userId}`);
         const data = await response.json();
         const jwt = data.jwt;
   

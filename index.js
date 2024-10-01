@@ -15,6 +15,8 @@ const vonage = new Vonage(
     }
 );
 
+const CLARIS_SERVER = process.env.CLARIS_SERVER_URL;   // Claris FileMaker ServerのURL
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
@@ -69,6 +71,11 @@ app.get('/getToken', async (req, res, next) => {
     }
 });
 
+const pickupOperator = async () => {
+    let userId = '';
+    return userId;
+}
+
 // 着信のイベントハンドラ
 app.post('/onCall', async (req, res, next) => {
     console.log(`🐞 onCall called via ${req.body.from ? req.body.from : req.body.from_user}`);
@@ -81,7 +88,7 @@ app.post('/onCall', async (req, res, next) => {
                     from: req.body.from,
                     endpoint: [{
                         type: 'app',
-                        user: 'Operator' 
+                        user: 'user01@sample.com' 
                     }]
                 }
             ]);            

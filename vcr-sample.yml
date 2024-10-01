@@ -14,6 +14,8 @@ instance:
   environment:
     - name: VONAGE_NUMBER
       value: "120XXXXXXXX"
+    - name: CLARIS_SERVER_URL
+      value: "https://example.com/fmi/odata/v4/ClickToCall/"
 debug:
   name: debug
   entrypoint:
