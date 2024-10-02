@@ -194,6 +194,7 @@ app.post('/onCall', async (req, res, next) => {
 
 // イベント発生時のイベントハンドラー
 app.post('/onEvent', async (req, res, next) => {
+    console.log(`🐞 onEvent called`);
     try {
         console.log('🐞 userId is: ', req.query.userId || '');
         console.log('🐞 event status is: ', req.body.status);

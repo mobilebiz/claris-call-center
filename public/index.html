@@ -41,6 +41,9 @@
           if (key === 'phone') {
             // valueの先頭１文字が「0」の場合は'+81'に変換
             phone = value.charAt(0) === '0' ? '+81' + value.slice(1) : value;
+            btnCall.disabled = false;
+            btnCall.innerHTML = '発信';
+            btnCall.hidden = false;
           }
         })
         if (userId === '') {
@@ -73,9 +76,11 @@
             btnHangup.innerHTML = '切断';
           }
           if (status === 'COMPLETED') { // 通話が終了
-            btnCall.disabled = false;
-            btnCall.innerHTML = '発信';
-            btnCall.hidden = false;
+            if (phone) {
+              btnCall.disabled = false;
+              btnCall.innerHTML = '発信';
+              btnCall.hidden = false;
+            }
             btnHangup.hidden = true;
             btnHangup.innerHTML = '切断';
           }
@@ -84,9 +89,11 @@
         // 通話が切断されたときのイベントリスナー
         client.on('callHangup', (callId, callQuality, reason) => {
           console.log('🐞 Call ended');
-          btnCall.disabled = false;
-          btnCall.innerHTML = '発信';
-          btnCall.hidden = false;
+          if (phone) {
+            btnCall.disabled = false;
+            btnCall.innerHTML = '発信';
+            btnCall.hidden = false;
+          }
           btnHangup.hidden = true;
           btnHangup.innerHTML = '切断';
         });
@@ -154,7 +161,11 @@
         btnHangup.innerHTML = '切断中...';
         client.hangup(currentCall).then(() => {
           console.log('Call ended');
-          btnCall.hidden = false;
+          if (phone) {
+            btnCall.disabled = false;
+            btnCall.innerHTML = '発信';
+            btnCall.hidden = false;
+          }
           btnHangup.hidden = true;
           btnHangup.disabled = false;
         }).catch((error) => {
