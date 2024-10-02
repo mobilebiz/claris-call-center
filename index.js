@@ -3,6 +3,7 @@ import { Vonage } from '@vonage/server-sdk';
 import express from 'express';
 import expressWs from 'express-ws';
 import cors from 'cors';
+import axios from 'axios';
 
 const app = express();
 const router = express.Router();
@@ -71,28 +72,110 @@ app.get('/getToken', async (req, res, next) => {
     }
 });
 
+// キューイングデータの登録
+const putQueue = async (body) => {
+    try {
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Basic dm9uYWdlOnZvbmFnZQ==`
+        }
+        const data = {
+            Conversation_uuid: body.conversation_uuid,
+            Status: 'ENQUEUE'
+        }
+        await axios.post(`${CLARIS_SERVER}/QueueData`, data, { headers });
+        return true;
+    } catch (e) {
+        console.error(e);
+        return false;
+    }
+}
+
+// オペレーターのピックアップ
 const pickupOperator = async () => {
-    let userId = '';
-    return userId;
+    console.log('🐞 pickupOperator called');
+    try {
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Basic dm9uYWdlOnZvbmFnZQ==`
+        }
+        const response = await axios.get(
+            `${CLARIS_SERVER}/Operator_Status?$top=1&$select=UserID&$filter=Status eq '待受中'&$orderby=LastCallTime asc`,
+            { headers }
+        );
+        console.dir(response.data);
+        const value = response.data.value || [];
+        return value[0] ? value[0].UserID : '';
+    } catch (e) {
+        console.error(e);
+        throw e;
+    }
+}
+
+// オペレーターのステータス変更
+const updateOperatorStatus = async (conversationId, incomingNumber, status, userId) => {
+    console.log(`🐞 updateOperatorStatus called ${status}`);
+    try {
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Basic dm9uYWdlOnZvbmFnZQ==`
+        }
+        const data = {
+            Status: status,
+            IncomingNumber: incomingNumber,
+            Conversation_uuid: conversationId
+        }
+        await axios.patch(`${CLARIS_SERVER}/Operator_Status?$filter=UserID eq '${userId}'`, data, { headers });
+        return true;
+    } catch (e) {
+        console.error(e);
+        throw e;
+    }
 }
 
 // 着信のイベントハンドラ
 app.post('/onCall', async (req, res, next) => {
     console.log(`🐞 onCall called via ${req.body.from ? req.body.from : req.body.from_user}`);
     console.dir(req.body);
+    // {
+    //   region_url: 'https://api-ap-3.vonage.com',
+    //   from: '818040643515',
+    //   to: '815031023328',
+    //   uuid: 'ca0e0bb06727997fea1f2a0d820daf86',
+    //   conversation_uuid: 'CON-2cb7723e-9bd5-4275-8064-254eda87a94b'
+    // }
     try {
         if (req.body.from) { // PSTN経由の着信
-            res.json([
-                {
-                    action: 'connect',
-                    from: req.body.from,
-                    endpoint: [{
-                        type: 'app',
-                        user: 'user01@sample.com' 
-                    }]
-                }
-            ]);            
-        } else {
+            // キューイングデータの登録
+            putQueue(req.body);
+            // オペレーターのピックアップ
+            const userId = await pickupOperator();
+            if (userId) { // オペレーターが見つかった場合
+                // オペレーターのステータス変更
+                updateOperatorStatus(req.body.conversation_uuid, req.body.from.replace(/^\+81/, '0'), '着信中', userId);
+                res.json([
+                    {
+                        action: 'connect',
+                        eventUrl: [`${process.env.VCR_URL}/onEvent?userId=${userId}`],
+                        from: req.body.from,
+                        endpoint: [{
+                            type: 'app',
+                            user: userId 
+                        }]
+                    }
+                ]);
+            } else { // オペレーターが見つからなかった場合
+                res.json([
+                    {
+                        action: 'talk',
+                        text: '申し訳ございませんが、現在対応できるオペレーターがいません。後ほどおかけ直しください。',
+                        language: 'ja-JP',
+                        voice: 3,
+                        premium: true
+                    }
+                ]);
+            }
+        } else { // WebRTC経由の着信
             res.json([
                 {
                     action: 'connect',
@@ -112,6 +195,7 @@ app.post('/onCall', async (req, res, next) => {
 // イベント発生時のイベントハンドラー
 app.post('/onEvent', async (req, res, next) => {
     try {
+        console.log('🐞 userId is: ', req.query.userId || '');
         console.log('🐞 event status is: ', req.body.status);
         console.log('🐞 event direction is: ', req.body.direction);
         res.sendStatus(200);

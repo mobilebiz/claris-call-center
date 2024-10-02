@@ -15,7 +15,9 @@ instance:
     - name: VONAGE_NUMBER
       value: "120XXXXXXXX"
     - name: CLARIS_SERVER_URL
-      value: "https://example.com/fmi/odata/v4/ClickToCall/"
+      value: "https://example.com/fmi/odata/v4/ClickToCall"
+    - name: VCR_URL
+      value: "http://localhost:3000"
 debug:
   name: debug
   entrypoint:
