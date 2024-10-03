@@ -162,7 +162,7 @@ app.post('/onCall', async (req, res, next) => {
                         transcription: {
                             language: 'ja-JP',
                             eventUrl: [`${process.env.VCR_URL}/onEventTranscribed`],
-                            sentimentAnalysis: true
+                            // sentimentAnalysis: true
                         },
                     },
                     {
