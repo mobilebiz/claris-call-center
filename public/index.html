@@ -108,6 +108,19 @@
           btnInvite.hidden = false;
           ringtone.play();  // 着信音を再生
         });
+
+        // 着信がキャンセルされたときのイベントリスナー
+        client.on('callInviteCancel', (callId) => {
+          console.log(`🐞 Call invite canceled.`)
+          ringtone.pause();  // 着信音を停止
+          ringtone.currentTime = 0; // 再生位置をリセット
+          if (phone) {
+            btnCall.disabled = false;
+            btnCall.innerHTML = '発信';
+            btnCall.hidden = false;
+          }
+          btnInvite.hidden = true;
+        });
         
       } catch (error) {
         console.error(`🐞 Error: ${error.message}`)                  
