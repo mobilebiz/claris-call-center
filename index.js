@@ -206,7 +206,7 @@ app.post('/onEvent', async (req, res, next) => {
             await updateOperatorStatus(req.body.conversation_uuid, req.body.from.replace(/^\+81/, '0'), '通話中', req.query.userId);
         }
         // 通話終了時の処理
-        if (req.body.status === 'completed') {
+        if (req.body.status === 'completed' && req.body.direction === 'outbound') {
             // オペレーターのステータス変更
             await updateOperatorStatus(req.body.conversation_uuid, '', '待受中', req.query.userId);
         }
