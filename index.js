@@ -153,7 +153,7 @@ app.post('/onCall', async (req, res, next) => {
             const userId = await pickupOperator();
             if (userId) { // オペレーターが見つかった場合
                 // オペレーターのステータス変更
-                updateOperatorStatus(req.body.conversation_uuid, req.body.from.replace(/^\+81/, '0'), '着信中', userId);
+                updateOperatorStatus(req.body.conversation_uuid, req.body.from.replace(/^\81/, '0'), '着信中', userId);
                 res.json([
                     {
                         action: 'record',
@@ -214,7 +214,7 @@ app.post('/onEvent', async (req, res, next) => {
         // 応答時の処理
         if (req.body.status === 'answered' && req.body.direction === 'outbound') {
             // オペレーターのステータス変更
-            await updateOperatorStatus(req.body.conversation_uuid, req.body.from.replace(/^\+81/, '0'), '通話中', req.query.userId);
+            await updateOperatorStatus(req.body.conversation_uuid, req.body.from.replace(/^\81/, '0'), '通話中', req.query.userId);
         }
         // 通話終了時の処理
         if (req.body.status === 'completed' && req.body.direction === 'outbound') {
