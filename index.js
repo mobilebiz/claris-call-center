@@ -261,7 +261,7 @@ app.post('/onEventRecorded', async (req, res, next) => {
         // 録音データの保存
         await saveRecordFile(req.body.conversation_uuid, req.body.recording_url);
         const recordingUrl = `${process.env.VCR_URL}/tmp/${req.body.conversation_uuid}.mp3`;
-        res.sendStatus(200).json({ recordingUrl });
+        res.json({ recordingUrl });
     } catch (e) {
         next(e);
     }
@@ -328,7 +328,7 @@ app.post('/onEventTranscribed', async (req, res, next) => {
         // 音声認識データの取得
         const transcript = await getTranscribedData(req.body.transcription_url);
         console.log(`🐞 transcript: ${transcript}`);
-        res.sendStatus(200).json({ transcript });
+        res.json({ transcript });
     } catch (e) {
         next(e);
     }
