@@ -152,11 +152,13 @@
 		async function invite() {
       try {
         btnInvite.disabled = true;
+        btnInvite.innerHTML = '応答中...';
         ringtone.pause();  // 着信音を停止
         ringtone.currentTime = 0; // 再生位置をリセット
         client.answer(currentCall).then(() => {
           console.log('Call answered');
           btnInvite.hidden = true;
+          btnInvite.innerHTML = '着信中...';
           btnHangup.hidden = false;
           btnHangup.disabled = false;
         }).catch((error) => {
