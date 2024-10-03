@@ -155,6 +155,16 @@ app.post('/onCall', async (req, res, next) => {
                 updateOperatorStatus(req.body.conversation_uuid, req.body.from.replace(/^\+81/, '0'), '着信中', userId);
                 res.json([
                     {
+                        action: 'record',
+                        eventUrl: [`${process.env.VCR_URL}/onEventRecorded`],
+                        split: 'conversation',
+                        transcription: {
+                            language: 'ja-JP',
+                            eventUrl: [`${process.env.VCR_URL}/onEventTranscribed`],
+                            sentimentAnalysis: true
+                        },
+                    },
+                    {
                         action: 'connect',
                         eventUrl: [`${process.env.VCR_URL}/onEvent?userId=${userId}`],
                         from: req.body.from,
@@ -211,6 +221,113 @@ app.post('/onEvent', async (req, res, next) => {
             await updateOperatorStatus(req.body.conversation_uuid, '', '待受中', req.query.userId);
         }
         res.sendStatus(200);
+    } catch (e) {
+        next(e);
+    }
+});
+
+// 録音データをファイルに保存
+async function saveRecordFile(conversation_uuid, recording_url) {
+    return new Promise(async (resolve, reject) => {
+        const jwt = generateJWT();
+        const config = {
+            headers: {
+                Authorization: `Bearer ${jwt}`
+            },
+            responseType: 'stream'
+        };
+        let response = await axios.get(recording_url, config);
+        console.log(`🐞 Recording file stream got.`);
+        const tmp_file_path = `./public/tmp/${conversation_uuid}.mp3`;    
+        const writer = fs.createWriteStream(tmp_file_path);
+        response.data.pipe(writer);
+        writer.on('finish', () => {
+            console.log(`🐞 Recording file stream saved.`);
+            resolve();
+        });
+        writer.on('error', (error) => {
+            console.log(error);
+            reject(error);
+        })
+    })
+}
+
+// 録音終了時のイベントハンドラー
+app.post('/onEventRecorded', async (req, res, next) => {
+    console.log(`🐞 onEventRecorded called`);
+    console.dir(req.body);
+    try {
+        // 録音データの保存
+        await saveRecordFile(req.body.conversation_uuid, req.body.recording_url);
+        const recordingUrl = `${process.env.VCR_URL}/tmp/${req.body.conversation_uuid}.mp3`;
+        res.sendStatus(200).json({ recordingUrl });
+    } catch (e) {
+        next(e);
+    }
+});
+
+// 音声認識データを取得
+async function getTranscribedData(transcription_url) {
+    return new Promise(async (resolve, reject) => {
+        const jwt = generateJWT();
+        const config = {
+            headers: {
+                Authorization: `Bearer ${jwt}`
+            }
+        };
+        try {
+            const response = await axios.get(transcription_url, config);
+            // console.log(`🐞 response.data: ${JSON.stringify(response.data)}`);
+            const agentSentences = response.data.channels[0]?.transcript;
+            const userSentences = response.data.channels[1]?.transcript;
+            let transcripts = [];
+            if (agentSentences) {
+                agentSentences.forEach((agentSentence) => {
+                    transcripts.push({
+                        ...agentSentence,
+                        speaker: 'agent',
+                    });
+                });
+            }
+            if (userSentences) {
+                userSentences.forEach((userSentence) => {
+                    transcripts.push({
+                        ...userSentence,
+                        speaker: 'user',
+                    });
+                });
+            }
+            // timestampでソートする
+            transcripts.sort((a, b) => {
+                if (a.timestamp < b.timestamp) return -1;
+                if (a.timestamp > b.timestamp) return 1;
+                return 0;
+            });
+            let transcript = '';
+            transcripts.forEach((t) => {
+                if (t.speaker === 'agent') {
+                    transcript += `[担当] ${t.sentence || ''}\n`;
+                } else if (t.speaker === 'user') {
+                    transcript += `[お客様] ${t.sentence || ''}\n`;
+                }
+            });
+            console.log(`🐞 transcript: ${transcript}`);
+            resolve(transcript);
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
+// 音声認識終了時のイベントハンドラー
+app.post('/onEventTranscribed', async (req, res, next) => {
+    console.log(`🐞 onEventTranscribed called`);
+    console.dir(req.body);
+    try {
+        // 音声認識データの取得
+        const transcript = await getTranscribedData(req.body.transcription_url);
+        console.log(`🐞 transcript: ${transcript}`);
+        res.sendStatus(200).json({ transcript });
     } catch (e) {
         next(e);
     }
