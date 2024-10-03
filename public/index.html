@@ -23,7 +23,6 @@
     let userId = '';  // オペレーターID
     const client = new vonageClientSDK.VonageClient();
     const ringtone = new Audio('./ringtone.mp3'); // 着信音のファイルパスを指定
-    ringtone.loop = true; // ループ再生   
       
     // ページのロードが完了したとき
     window.onload = async () => {
@@ -107,6 +106,7 @@
           btnCall.hidden = true;
           btnInvite.disabled = false;
           btnInvite.hidden = false;
+          ringtone.loop = true; // ループ再生   
           ringtone.play();  // 着信音を再生
         });
 
