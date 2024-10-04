@@ -16,6 +16,10 @@ instance:
       value: "120XXXXXXXX"
     - name: CLARIS_SERVER_URL
       value: "https://example.com/fmi/odata/v4/ClickToCall"
+    - name: USER
+      value: ""
+    - name: PASS
+      value: ""
     - name: VCR_URL
       value: "http://localhost:3000"
 debug:

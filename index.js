@@ -18,6 +18,7 @@ const vonage = new Vonage(
 );
 
 const CLARIS_SERVER = process.env.CLARIS_SERVER_URL;   // Claris FileMaker ServerのURL
+const BASIC_AUTH = Buffer.from(`${process.env.USER}:${process.env.PASS}`).toString('base64');
 
 app.use(cors());
 app.use(express.json());
@@ -78,7 +79,7 @@ const putQueue = async (body) => {
     try {
         const headers = {
             'Content-Type': 'application/json',
-            'Authorization': `Basic dm9uYWdlOnZvbmFnZQ==`
+            'Authorization': `Basic ${BASIC_AUTH}`
         }
         const data = {
             Conversation_uuid: body.conversation_uuid,
@@ -98,7 +99,7 @@ const pickupOperator = async () => {
     try {
         const headers = {
             'Content-Type': 'application/json',
-            'Authorization': `Basic dm9uYWdlOnZvbmFnZQ==`
+            'Authorization': `Basic ${BASIC_AUTH}`
         }
         const response = await axios.get(
             `${CLARIS_SERVER}/Operator_Status?$top=1&$select=UserID&$filter=Status eq '待受中'&$orderby=LastCallTime asc`,
@@ -119,7 +120,7 @@ const updateOperatorStatus = async (conversationId, incomingNumber, status, user
     try {
         const headers = {
             'Content-Type': 'application/json',
-            'Authorization': `Basic dm9uYWdlOnZvbmFnZQ==`
+            'Authorization': `Basic ${BASIC_AUTH}`
         }
         const data = {
             Status: status,
