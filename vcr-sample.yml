@@ -22,6 +22,12 @@ instance:
       value: ""
     - name: VCR_URL
       value: "http://localhost:3000"
+    - name: ENV_VAR
+      value: "Claris Call Center"
+    - name: END_POINT_RECORDING
+      value: "https://xxxxxx.apps.connect.claris.com/api/webhook/v1/voice/catch"
+    - name: END_POINT_TRANSCRIPTION
+      value: "https://xxxxxx.apps.connect.claris.com/api/webhook/v1/transcription/catch"
 debug:
   name: debug
   entrypoint:

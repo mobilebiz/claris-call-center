@@ -19,6 +19,8 @@ const vonage = new Vonage(
 
 const CLARIS_SERVER = process.env.CLARIS_SERVER_URL;   // Claris FileMaker ServerのURL
 const BASIC_AUTH = Buffer.from(`${process.env.USER}:${process.env.PASS}`).toString('base64');
+const END_POINT_RECORDING = process.env.END_POINT_RECORDING; // 録音データのエンドポイント
+const END_POINT_TRANSCRIPTION = process.env.END_POINT_TRANSCRIPTION; // 音声認識データのエンドポイント
 
 app.use(cors());
 app.use(express.json());
@@ -140,13 +142,6 @@ const updateOperatorStatus = async (conversationId, incomingNumber, status, user
 app.post('/onCall', async (req, res, next) => {
     console.log(`🐞 onCall called via ${req.body.from ? req.body.from : req.body.from_user}`);
     console.dir(req.body);
-    // {
-    //   region_url: 'https://api-ap-3.vonage.com',
-    //   from: '818040643515',
-    //   to: '815031023328',
-    //   uuid: 'ca0e0bb06727997fea1f2a0d820daf86',
-    //   conversation_uuid: 'CON-2cb7723e-9bd5-4275-8064-254eda87a94b'
-    // }
     try {
         if (req.body.from) { // PSTN経由の着信
             // キューイングデータの登録
@@ -263,7 +258,14 @@ app.post('/onEventRecorded', async (req, res, next) => {
         // 録音データの保存
         await saveRecordFile(req.body.conversation_uuid, req.body.recording_url);
         const recordingUrl = `${process.env.VCR_URL}/tmp/${req.body.conversation_uuid}.mp3`;
-        res.json({ recordingUrl });
+        const data = {
+            conversation_uuid: req.body.conversation_uuid,
+            recording_url: recordingUrl,
+            customer_id: ''
+        }
+        const response = await axios.post(END_POINT_RECORDING, data);
+        console.log(`🐞 response data: ${JSON.stringify(response.data)}`)
+        res.sendStatus(200);
     } catch (e) {
         next(e);
     }
@@ -330,7 +332,14 @@ app.post('/onEventTranscribed', async (req, res, next) => {
         // 音声認識データの取得
         const transcript = await getTranscribedData(req.body.transcription_url);
         console.log(`🐞 transcript: ${transcript}`);
-        res.json({ transcript });
+        const data = {
+            conversation_uuid: req.body.conversation_uuid,
+            transcript: transcript,
+            customer_id: ''
+        }
+        const response = await axios.post(END_POINT_TRANSCRIPTION, data);
+        console.log(`🐞 response data: ${JSON.stringify(response.data)}`)
+        res.sendStatus(200);
     } catch (e) {
         next(e);
     }
