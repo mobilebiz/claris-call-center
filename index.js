@@ -185,7 +185,7 @@ app.post('/onCall', async (req, res, next) => {
             }
         } else { // WebRTC経由の着信
             // オペレーターのステータス変更
-            updateOperatorStatus(req.body.conversation_uuid, req.body.to.replace(/^\81/, '0'), '発信中', userId);
+            updateOperatorStatus(req.body.conversation_uuid, req.body.to.replace(/^\81/, '0'), '発信中', req.body.from_user);
             res.json([
                 {
                     action: 'connect',
