@@ -77,7 +77,7 @@ app.get('/getToken', async (req, res, next) => {
 });
 
 // キューイングデータの登録
-const putQueue = async (body) => {
+const putQueue = async (body, status = 'ENQUEUE') => {
     try {
         const headers = {
             'Content-Type': 'application/json',
@@ -86,7 +86,7 @@ const putQueue = async (body) => {
         const data = {
             Conversation_uuid: body.conversation_uuid,
             IncomingNumber: body.from.replace(/^\81/, '0'),
-            Status: 'ENQUEUE'
+            Status: status
         }
         await axios.post(`${CLARIS_SERVER}/QueueData`, data, { headers });
         return true;
@@ -145,7 +145,7 @@ app.post('/onCall', async (req, res, next) => {
     try {
         if (req.body.from) { // PSTN経由の着信
             // キューイングデータの登録
-            putQueue(req.body);
+            putQueue(req.body, 'ENQUEUE');
             // オペレーターのピックアップ
             const userId = await pickupOperator();
             if (userId) { // オペレーターが見つかった場合
@@ -184,6 +184,8 @@ app.post('/onCall', async (req, res, next) => {
                 ]);
             }
         } else { // WebRTC経由の着信
+            // 履歴データの登録
+            putQueue(req.body, 'CALLING');
             // オペレーターのステータス変更
             updateOperatorStatus(req.body.conversation_uuid, req.body.to.replace(/^\81/, '0'), '発信中', req.body.from_user);
             res.json([
