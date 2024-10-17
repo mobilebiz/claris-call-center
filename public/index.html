@@ -138,6 +138,7 @@
           console.log('🐞 Calling ...');
           btnCall.innerHTML = '発信中...';
           currentCall = callId;
+          phone = ''; // 電話番号をクリア（次回以降発信を防ぐ）
         }).catch((error) => {
           throw error;
         });
