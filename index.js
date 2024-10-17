@@ -127,7 +127,7 @@ const updateOperatorStatus = async (conversationId, incomingNumber, status, user
         }
         const data = {
             Status: status,
-            IncomingNumber: incomingNumber,
+            IncomingNumber: incomingNumber.replace(/^\81/, '0'),
             Conversation_uuid: conversationId
         }
         await axios.patch(`${CLARIS_SERVER}/Operator_Status?$filter=UserID eq '${userId}'`, data, { headers });
@@ -150,7 +150,7 @@ app.post('/onCall', async (req, res, next) => {
             const userId = await pickupOperator();
             if (userId) { // オペレーターが見つかった場合
                 // オペレーターのステータス変更
-                updateOperatorStatus(req.body.conversation_uuid, req.body.from.replace(/^\81/, '0'), '着信中', userId);
+                updateOperatorStatus(req.body.conversation_uuid, req.body.from, '着信中', userId);
                 res.json([
                     {
                         action: 'record',
@@ -187,7 +187,7 @@ app.post('/onCall', async (req, res, next) => {
             // 履歴データの登録
             putQueue(req.body, 'CALLING');
             // オペレーターのステータス変更
-            updateOperatorStatus(req.body.conversation_uuid, req.body.to.replace(/^\81/, '0'), '発信中', req.body.from_user);
+            updateOperatorStatus(req.body.conversation_uuid, req.body.to, '発信中', req.body.from_user);
             res.json([
                 {
                     action: 'connect',
@@ -215,7 +215,7 @@ app.post('/onEvent', async (req, res, next) => {
         // 応答時の処理
         if (req.body.status === 'answered' && req.body.direction === 'outbound') {
             // オペレーターのステータス変更
-            await updateOperatorStatus(req.body.conversation_uuid, req.body.from.replace(/^\81/, '0'), '通話中', req.query.userId);
+            await updateOperatorStatus(req.body.conversation_uuid, req.body.from, '通話中', req.query.userId);
         }
         // 通話終了時の処理
         if (req.body.status === 'completed' && req.body.direction === 'outbound') {
