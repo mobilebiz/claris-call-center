@@ -184,6 +184,7 @@ app.post('/onCall', async (req, res, next) => {
                 ]);
             }
         } else { // WebRTC経由の着信
+            const userId = req.body.from_user;
             // 履歴データの登録
             putQueue(req.body, 'CALLING');
             // オペレーターのステータス変更
