@@ -85,7 +85,7 @@ const putQueue = async (body, status = 'ENQUEUE') => {
         }
         const data = {
             Conversation_uuid: body.conversation_uuid,
-            IncomingNumber: body.from ? body.from.replace(/^\81/, '0') : body.to.replace(/^\81/, '0'),
+            IncomingNumber: body.from ? body.from.replace(/^\+?81/, '0') : body.to.replace(/^\+?81/, '0'),
             Status: status
         }
         await axios.post(`${CLARIS_SERVER}/QueueData`, data, { headers });
@@ -127,7 +127,7 @@ const updateOperatorStatus = async (conversationId, incomingNumber, status, user
         }
         const data = {
             Status: status,
-            IncomingNumber: incomingNumber.replace(/^\81/, '0'),
+            IncomingNumber: incomingNumber.replace(/^\+?81/, '0'),
             Conversation_uuid: conversationId
         }
         await axios.patch(`${CLARIS_SERVER}/Operator_Status?$filter=UserID eq '${userId}'`, data, { headers });
