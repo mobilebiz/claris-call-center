@@ -201,6 +201,7 @@ app.post('/onCall', async (req, res, next) => {
                 },
                 {
                     action: 'connect',
+                    eventUrl: [`${process.env.VCR_URL}/onEvent?userId=${userId}`],
                     from: process.env.VONAGE_NUMBER,
                     endpoint: [{
                         type: 'phone',
@@ -223,7 +224,8 @@ app.post('/onEvent', async (req, res, next) => {
         console.log('🐞 event status is: ', req.body.status);
         console.log('🐞 event direction is: ', req.body.direction);
         // 応答時の処理
-        if (req.body.status === 'answered' && req.body.direction === 'outbound') {
+        // if (req.body.status === 'answered' && req.body.direction === 'outbound') {
+        if (req.body.status === 'answered') {
             // オペレーターのステータス変更
             await updateOperatorStatus(req.body.conversation_uuid, req.body.from, '通話中', req.query.userId);
         }
