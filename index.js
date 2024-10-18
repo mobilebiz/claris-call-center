@@ -190,6 +190,16 @@ app.post('/onCall', async (req, res, next) => {
             updateOperatorStatus(req.body.conversation_uuid, req.body.to, '発信中', req.body.from_user);
             res.json([
                 {
+                    action: 'record',
+                    eventUrl: [`${process.env.VCR_URL}/onEventRecorded`],
+                    split: 'conversation',
+                    transcription: {
+                        language: 'ja-JP',
+                        eventUrl: [`${process.env.VCR_URL}/onEventTranscribed`],
+                        // sentimentAnalysis: true
+                    },
+                },
+                {
                     action: 'connect',
                     from: process.env.VONAGE_NUMBER,
                     endpoint: [{
