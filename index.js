@@ -86,7 +86,8 @@ const putQueue = async (body, status = 'ENQUEUE') => {
         const data = {
             Conversation_uuid: body.conversation_uuid,
             IncomingNumber: body.from ? body.from.replace(/^\+?81/, '0') : body.to.replace(/^\+?81/, '0'),
-            Status: status
+            Status: status,
+            Type: status === 'ENQUEUE' ? 'INCOMING' : 'OUTGOING'
         }
         await axios.post(`${CLARIS_SERVER}/QueueData`, data, { headers });
         return true;
