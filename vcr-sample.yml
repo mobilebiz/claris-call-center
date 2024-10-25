@@ -20,7 +20,7 @@ instance:
       value: ""
     - name: PASS
       value: ""
-    - name: VCR_URL
+    - name: SERVER_URL
       value: "http://localhost:3000"
     - name: ENV_VAR
       value: "Claris Call Center"

@@ -177,17 +177,17 @@ app.post('/onCall', async (req, res, next) => {
                 res.json([
                     {
                         action: 'record',
-                        eventUrl: [`${process.env.VCR_URL}/onEventRecorded`],
+                        eventUrl: [`${process.env.SERVER_URL}/onEventRecorded`],
                         split: 'conversation',
                         transcription: {
                             language: 'ja-JP',
-                            eventUrl: [`${process.env.VCR_URL}/onEventTranscribed`],
+                            eventUrl: [`${process.env.SERVER_URL}/onEventTranscribed`],
                             // sentimentAnalysis: true
                         },
                     },
                     {
                         action: 'connect',
-                        eventUrl: [`${process.env.VCR_URL}/onEvent?userId=${userId}`],
+                        eventUrl: [`${process.env.SERVER_URL}/onEvent?userId=${userId}`],
                         from: req.body.from,
                         endpoint: [{
                             type: 'app',
@@ -215,17 +215,17 @@ app.post('/onCall', async (req, res, next) => {
             res.json([
                 {
                     action: 'record',
-                    eventUrl: [`${process.env.VCR_URL}/onEventRecorded`],
+                    eventUrl: [`${process.env.SERVER_URL}/onEventRecorded`],
                     split: 'conversation',
                     transcription: {
                         language: 'ja-JP',
-                        eventUrl: [`${process.env.VCR_URL}/onEventTranscribed`],
+                        eventUrl: [`${process.env.SERVER_URL}/onEventTranscribed`],
                         // sentimentAnalysis: true
                     },
                 },
                 {
                     action: 'connect',
-                    eventUrl: [`${process.env.VCR_URL}/onEvent?userId=${userId}`],
+                    eventUrl: [`${process.env.SERVER_URL}/onEvent?userId=${userId}`],
                     from: process.env.VONAGE_NUMBER,
                     endpoint: [{
                         type: 'phone',
@@ -297,7 +297,7 @@ app.post('/onEventRecorded', async (req, res, next) => {
     try {
         // 録音データの保存
         await saveRecordFile(req.body.conversation_uuid, req.body.recording_url);
-        const recordingUrl = `${process.env.VCR_URL}/tmp/${req.body.conversation_uuid}.mp3`;
+        const recordingUrl = `${process.env.SERVER_URL}/tmp/${req.body.conversation_uuid}.mp3`;
         const data = {
             conversation_uuid: req.body.conversation_uuid,
             recording_url: recordingUrl,
