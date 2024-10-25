@@ -43,6 +43,28 @@ app.get('/_/metrics', async (req, res) => {
     res.sendStatus(200);
 });
 
+app.post('/getKana', async (req, res, next) => {
+    console.log(`🐞 getKana called`);
+    const number = req.body.number ? req.body.number.replace(/^81/, '0') : '';  // 電話番号をOABJに変換
+    if (!number) {
+        res.sendStatus(400);
+        return;
+    }
+    try {
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Basic ${BASIC_AUTH}`
+        }
+        const response = await axios.get(`${CLARIS_SERVER}/Customer?$top=1&$select=LastName_Furigana, FirstName_Furigana&$filter=TelNo eq '${number}'`, { headers });
+        const value = response.data.value || [];
+        const kana = value[0] ? `${value[0].LastName_Furigana || ''} ${value[0].FirstName_Furigana || ''}` : '';
+        res.json({ kana });
+    } catch (e) {
+        next(e);
+    }
+    res.sendStatus(200);
+});
+
 app.get('/getToken', async (req, res, next) => {
     try {
         let user;
