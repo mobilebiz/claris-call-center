@@ -323,8 +323,8 @@ async function getTranscribedData(transcription_url) {
         try {
             const response = await axios.get(transcription_url, config);
             // console.log(`🐞 response.data: ${JSON.stringify(response.data)}`);
-            const agentSentences = response.data.channels[0]?.transcript;
-            const userSentences = response.data.channels[1]?.transcript;
+            const agentSentences = response.data.channels[1]?.transcript;
+            const userSentences = response.data.channels[0]?.transcript;
             let transcripts = [];
             if (agentSentences) {
                 agentSentences.forEach((agentSentence) => {
