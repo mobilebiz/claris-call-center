@@ -178,7 +178,7 @@ app.post('/onCall', async (req, res, next) => {
                 // オペレーターのステータス変更
                 updateOperatorStatus(req.body.conversation_uuid, req.body.from, '着信中', userId);
                 // ウェイト処理
-                await wait(3000);
+                // await wait(3000);
                 res.json([
                     {
                         action: 'record',
