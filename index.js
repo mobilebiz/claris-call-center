@@ -140,11 +140,7 @@ const pickupOperator = async () => {
     }
 }
 
-// ウェイト処理
-const wait = async (ms) => new Promise(resolve => setTimeout(resolve, ms));
-      
 // オペレーターのステータス変更
-// const updateOperatorStatus = async (conversationId, incomingNumber, status, userId) => {
 const updateOperatorStatus = async (conversationId, incomingNumber, status, userId) => {
     console.log(`🐞 updateOperatorStatus called ${status}`);
     try {
@@ -157,15 +153,16 @@ const updateOperatorStatus = async (conversationId, incomingNumber, status, user
             IncomingNumber: incomingNumber.replace(/^\+?81/, '0'),
             Conversation_uuid: conversationId
         }
-        // await axios.patch(`${CLARIS_SERVER}/Operator_Status?$filter=UserID eq '${userId}'`, data, { headers });
-        wait(1000); // 1秒待ってからステータスを更新（Webビューアがリロードされるのを防ぐ）
-        axios.patch(`${CLARIS_SERVER}/Operator_Status?$filter=UserID eq '${userId}'`, data, { headers });
+        await axios.patch(`${CLARIS_SERVER}/Operator_Status?$filter=UserID eq '${userId}'`, data, { headers });
         return true;
     } catch (e) {
         console.error(e);
         throw e;
     }
 }
+
+// ウェイト処理（ｍｓ）
+const wait = async (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // 着信のイベントハンドラ
 app.post('/onCall', async (req, res, next) => {
@@ -180,6 +177,8 @@ app.post('/onCall', async (req, res, next) => {
             if (userId) { // オペレーターが見つかった場合
                 // オペレーターのステータス変更
                 updateOperatorStatus(req.body.conversation_uuid, req.body.from, '着信中', userId);
+                // ウェイト処理
+                await wait(1000);
                 res.json([
                     {
                         action: 'record',
