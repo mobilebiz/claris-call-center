@@ -23,6 +23,9 @@
     let userId = '';  // オペレーターID
     const client = new vonageClientSDK.VonageClient();
     const ringtone = new Audio('./ringtone.mp3'); // 着信音のファイルパスを指定
+
+    // ウェイト処理
+    const wait = async (ms) => new Promise(resolve => setTimeout(resolve, ms));
       
     // ページのロードが完了したとき
     window.onload = async () => {
@@ -99,8 +102,9 @@
         });
 
         // 着信したときのイベントリスナー
-        client.on('callInvite', (callId) => {
+        client.on('callInvite', async (callId) => {
           console.log(`🐞 Incoming call.`)
+          await wait(1000); // 1秒待機(FileMaker対策)
           currentCall = callId;
           btnCall.disabled = true;
           btnCall.hidden = true;
