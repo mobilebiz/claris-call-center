@@ -140,9 +140,12 @@ const pickupOperator = async () => {
     }
 }
 
+// ウェイト処理
+const wait = async (ms) => new Promise(resolve => setTimeout(resolve, ms));
+      
 // オペレーターのステータス変更
 // const updateOperatorStatus = async (conversationId, incomingNumber, status, userId) => {
-const updateOperatorStatus = (conversationId, incomingNumber, status, userId) => {
+const updateOperatorStatus = async (conversationId, incomingNumber, status, userId) => {
     console.log(`🐞 updateOperatorStatus called ${status}`);
     try {
         const headers = {
@@ -155,6 +158,7 @@ const updateOperatorStatus = (conversationId, incomingNumber, status, userId) =>
             Conversation_uuid: conversationId
         }
         // await axios.patch(`${CLARIS_SERVER}/Operator_Status?$filter=UserID eq '${userId}'`, data, { headers });
+        wait(1000); // 1秒待ってからステータスを更新（Webビューアがリロードされるのを防ぐ）
         axios.patch(`${CLARIS_SERVER}/Operator_Status?$filter=UserID eq '${userId}'`, data, { headers });
         return true;
     } catch (e) {
