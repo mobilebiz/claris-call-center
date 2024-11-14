@@ -141,7 +141,8 @@ const pickupOperator = async () => {
 }
 
 // オペレーターのステータス変更
-const updateOperatorStatus = async (conversationId, incomingNumber, status, userId) => {
+// const updateOperatorStatus = async (conversationId, incomingNumber, status, userId) => {
+const updateOperatorStatus = (conversationId, incomingNumber, status, userId) => {
     console.log(`🐞 updateOperatorStatus called ${status}`);
     try {
         const headers = {
@@ -153,7 +154,8 @@ const updateOperatorStatus = async (conversationId, incomingNumber, status, user
             IncomingNumber: incomingNumber.replace(/^\+?81/, '0'),
             Conversation_uuid: conversationId
         }
-        await axios.patch(`${CLARIS_SERVER}/Operator_Status?$filter=UserID eq '${userId}'`, data, { headers });
+        // await axios.patch(`${CLARIS_SERVER}/Operator_Status?$filter=UserID eq '${userId}'`, data, { headers });
+        axios.patch(`${CLARIS_SERVER}/Operator_Status?$filter=UserID eq '${userId}'`, data, { headers });
         return true;
     } catch (e) {
         console.error(e);
