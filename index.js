@@ -12,8 +12,8 @@ expressWs(router);
 const port = process.env.VCR_PORT;
 const vonage = new Vonage(
     {
-      applicationId: process.env.API_APPLICATION_ID,
-      privateKey: process.env.PRIVATE_KEY
+        applicationId: process.env.API_APPLICATION_ID,
+        privateKey: process.env.PRIVATE_KEY
     }
 );
 
@@ -72,7 +72,7 @@ app.get('/getToken', async (req, res, next) => {
         const name = req.query.name || 'Operator';
         try {
             // すでにユーザーが存在するかを確認
-            const users = await vonage.users.getUserPage({name});
+            const users = await vonage.users.getUserPage({ name });
             // 既存ユーザーを流用
             user = users._embedded.users[0]
         } catch (e) {
@@ -196,7 +196,7 @@ app.post('/onCall', async (req, res, next) => {
                         from: req.body.from,
                         endpoint: [{
                             type: 'app',
-                            user: userId 
+                            user: userId
                         }]
                     }
                 ]);
@@ -237,7 +237,7 @@ app.post('/onCall', async (req, res, next) => {
                         number: req.body.to
                     }]
                 }
-            ]);            
+            ]);
         }
     } catch (e) {
         next(e);
@@ -254,7 +254,7 @@ app.post('/onEvent', async (req, res, next) => {
         console.log('🐞 event direction is: ', req.body.direction);
         // 応答時の処理
         if (req.body.status === 'answered' && req.body.direction === 'outbound') {
-        // if (req.body.status === 'answered') {
+            // if (req.body.status === 'answered') {
             // オペレーターのステータス変更
             await updateOperatorStatus(req.body.conversation_uuid, req.body.from, '通話中', req.query.userId);
         }
@@ -281,7 +281,7 @@ async function saveRecordFile(conversation_uuid, recording_url) {
         };
         let response = await axios.get(recording_url, config);
         console.log(`🐞 Recording file stream got.`);
-        const tmp_file_path = `./public/tmp/${conversation_uuid}.mp3`;    
+        const tmp_file_path = `./public/tmp/${conversation_uuid}.mp3`;
         const writer = fs.createWriteStream(tmp_file_path);
         response.data.pipe(writer);
         writer.on('finish', () => {
@@ -303,12 +303,24 @@ app.post('/onEventRecorded', async (req, res, next) => {
         // 録音データの保存
         await saveRecordFile(req.body.conversation_uuid, req.body.recording_url);
         const recordingUrl = `${process.env.SERVER_URL}/tmp/${req.body.conversation_uuid}.mp3`;
-        const data = {
-            conversation_uuid: req.body.conversation_uuid,
-            recording_url: recordingUrl,
-            customer_id: ''
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Basic ${BASIC_AUTH}`
         }
-        const response = await axios.post(END_POINT_RECORDING, data);
+        const data = {
+            scriptParameterValue: `"${req.body.conversation_uuid}||${recordingUrl}"`
+            // conversation_uuid: req.body.conversation_uuid,
+            // recording_url: recordingUrl,
+            // customer_id: ''
+        }
+
+        const response = await axios.post(
+            `${CLARIS_SERVER}/Script.GetRecordedFile`,
+            data,
+            { headers }
+        );
+
+        // const response = await axios.post(END_POINT_RECORDING, data);
         console.log(`🐞 response data: ${JSON.stringify(response.data)}`)
         res.sendStatus(200);
     } catch (e) {
@@ -379,10 +391,16 @@ app.post('/onEventTranscribed', async (req, res, next) => {
         console.log(`🐞 transcript: ${transcript}`);
         const data = {
             conversation_uuid: req.body.conversation_uuid,
-            transcript: transcript,
-            customer_id: ''
+            LLM: transcript,
+            CustomerNo: ''
         }
-        const response = await axios.post(END_POINT_TRANSCRIPTION, data);
+        const response = await axios.post(
+            `${CLARIS_SERVER}/TranscriptionData`,
+            data,
+            { headers }
+        );
+
+        // const response = await axios.post(END_POINT_TRANSCRIPTION, data);
         console.log(`🐞 response data: ${JSON.stringify(response.data)}`)
         res.sendStatus(200);
     } catch (e) {
