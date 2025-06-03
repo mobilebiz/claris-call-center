@@ -389,6 +389,10 @@ app.post('/onEventTranscribed', async (req, res, next) => {
         // 音声認識データの取得
         const transcript = await getTranscribedData(req.body.transcription_url);
         console.log(`🐞 transcript: ${transcript}`);
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Basic ${BASIC_AUTH}`
+        }
         const data = {
             conversation_uuid: req.body.conversation_uuid,
             LLM: transcript,
