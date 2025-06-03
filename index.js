@@ -306,7 +306,7 @@ app.post('/onEventRecorded', async (req, res, next) => {
             'Authorization': `Basic ${BASIC_AUTH}`
         }
         const data = {
-            scriptParameterValue: `"${req.body.conversation_uuid}||${recordingUrl}"`
+            scriptParameterValue: `${req.body.conversation_uuid}||${recordingUrl}`
             // conversation_uuid: req.body.conversation_uuid,
             // recording_url: recordingUrl,
             // customer_id: ''
