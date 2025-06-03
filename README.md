@@ -70,10 +70,6 @@ environment:
     value: ""  # Claris FileMaker Serverのパスワード
   - name: SERVER_URL
     value: "http://localhost:3000"  # このアプリケーションのサーバーURL
-  - name: END_POINT_RECORDING
-    value: "https://xxxxxx.apps.connect.claris.com/api/webhook/v1/voice/catch"  # 録音データのエンドポイント
-  - name: END_POINT_TRANSCRIPTION
-    value: "https://xxxxxx.apps.connect.claris.com/api/webhook/v1/transcription/catch"  # 音声認識データのエンドポイント
 ```
 
 注意：
@@ -82,7 +78,6 @@ environment:
 - `VONAGE_NUMBER`は、Vonageで取得した電話番号を設定してください
 - `CLARIS_SERVER_URL`は、Claris FileMaker ServerのOData APIのURLを設定してください
 - `SERVER_URL`は、このアプリケーションがデプロイされるURLを設定してください
-- `END_POINT_RECORDING`と`END_POINT_TRANSCRIPTION`は、Claris ConnectのWebhook URLを設定してください
 
 ## オペレーター用Webインターフェース
 

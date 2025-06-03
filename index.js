@@ -19,8 +19,6 @@ const vonage = new Vonage(
 
 const CLARIS_SERVER = process.env.CLARIS_SERVER_URL;   // Claris FileMaker ServerのURL
 const BASIC_AUTH = Buffer.from(`${process.env.USER}:${process.env.PASS}`).toString('base64');
-const END_POINT_RECORDING = process.env.END_POINT_RECORDING; // 録音データのエンドポイント
-const END_POINT_TRANSCRIPTION = process.env.END_POINT_TRANSCRIPTION; // 音声認識データのエンドポイント
 
 app.use(cors());
 app.use(express.json());
