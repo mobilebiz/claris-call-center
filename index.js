@@ -33,14 +33,26 @@ await voice.onCall('onCall');
 // セッション内のイベントが発生した場合の関数を定義
 await voice.onCallEvent({ callback: 'onEvent' });
 
+/**
+ * ヘルスチェック用エンドポイント
+ */
 app.get('/_/health', async (req, res) => {
     res.sendStatus(200);
 });
 
+/**
+ * メトリクス取得用エンドポイント
+ */
 app.get('/_/metrics', async (req, res) => {
     res.sendStatus(200);
 });
 
+/**
+ * 電話番号からフリガナ情報を取得するAPI
+ * @param {Object} req - リクエストオブジェクト
+ * @param {Object} res - レスポンスオブジェクト
+ * @param {Function} next - 次のミドルウェア関数
+ */
 app.post('/getKana', async (req, res, next) => {
     console.log(`🐞 getKana called`);
     const number = req.body.number ? req.body.number.replace(/^81/, '0') : '';  // 電話番号をOABJに変換
@@ -63,6 +75,12 @@ app.post('/getKana', async (req, res, next) => {
     res.sendStatus(200);
 });
 
+/**
+ * JWT認証トークンを取得するAPI
+ * @param {Object} req - リクエストオブジェクト
+ * @param {Object} res - レスポンスオブジェクト
+ * @param {Function} next - 次のミドルウェア関数
+ */
 app.get('/getToken', async (req, res, next) => {
     try {
         let user;
@@ -96,7 +114,12 @@ app.get('/getToken', async (req, res, next) => {
     }
 });
 
-// キューイングデータの登録
+/**
+ * キューイングデータの登録
+ * @param {Object} body - リクエストボディ
+ * @param {string} status - ステータス（デフォルト: 'ENQUEUE'）
+ * @returns {Promise<boolean>} 登録成功時はtrue、失敗時はfalse
+ */
 const putQueue = async (body, status = 'ENQUEUE') => {
     try {
         const headers = {
@@ -117,7 +140,10 @@ const putQueue = async (body, status = 'ENQUEUE') => {
     }
 }
 
-// オペレーターのピックアップ
+/**
+ * オペレーターのピックアップ
+ * @returns {Promise<string>} オペレーターのユーザーID
+ */
 const pickupOperator = async () => {
     console.log('🐞 pickupOperator called');
     try {
@@ -138,7 +164,14 @@ const pickupOperator = async () => {
     }
 }
 
-// オペレーターのステータス変更
+/**
+ * オペレーターのステータス変更
+ * @param {string} conversationId - 会話ID
+ * @param {string} incomingNumber - 着信番号
+ * @param {string} status - ステータス
+ * @param {string} userId - ユーザーID
+ * @returns {Promise<boolean>} 更新成功時はtrue
+ */
 const updateOperatorStatus = async (conversationId, incomingNumber, status, userId) => {
     console.log(`🐞 updateOperatorStatus called ${status}`);
     try {
@@ -159,13 +192,21 @@ const updateOperatorStatus = async (conversationId, incomingNumber, status, user
     }
 }
 
-// ウェイト処理（ｍｓ）
+/**
+ * ウェイト処理（ｍｓ）
+ * @param {number} ms - 待機時間（ミリ秒）
+ * @returns {Promise<void>}
+ */
 const wait = async (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// 着信のイベントハンドラ
+/**
+ * 着信のイベントハンドラ
+ * @param {Object} req - リクエストオブジェクト
+ * @param {Object} res - レスポンスオブジェクト
+ * @param {Function} next - 次のミドルウェア関数
+ */
 app.post('/onCall', async (req, res, next) => {
     console.log(`🐞 onCall called via ${req.body.from ? req.body.from : req.body.from_user}`);
-    console.dir(req.body);
     try {
         if (req.body.from) { // PSTN経由の着信
             // キューイングデータの登録
@@ -180,17 +221,17 @@ app.post('/onCall', async (req, res, next) => {
                 res.json([
                     {
                         action: 'record',
-                        eventUrl: [`${process.env.SERVER_URL}/onEventRecorded`],
+                        eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEventRecorded`],
                         split: 'conversation',
                         transcription: {
                             language: 'ja-JP',
-                            eventUrl: [`${process.env.SERVER_URL}/onEventTranscribed`],
+                            eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEventTranscribed`],
                             // sentimentAnalysis: true
                         },
                     },
                     {
                         action: 'connect',
-                        eventUrl: [`${process.env.SERVER_URL}/onEvent?userId=${userId}`],
+                        eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?userId=${userId}`],
                         from: req.body.from,
                         endpoint: [{
                             type: 'app',
@@ -218,17 +259,17 @@ app.post('/onCall', async (req, res, next) => {
             res.json([
                 {
                     action: 'record',
-                    eventUrl: [`${process.env.SERVER_URL}/onEventRecorded`],
+                    eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEventRecorded`],
                     split: 'conversation',
                     transcription: {
                         language: 'ja-JP',
-                        eventUrl: [`${process.env.SERVER_URL}/onEventTranscribed`],
+                        eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEventTranscribed`],
                         // sentimentAnalysis: true
                     },
                 },
                 {
                     action: 'connect',
-                    eventUrl: [`${process.env.SERVER_URL}/onEvent?userId=${userId}`],
+                    eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?userId=${userId}`],
                     from: process.env.VONAGE_NUMBER,
                     endpoint: [{
                         type: 'phone',
@@ -242,10 +283,14 @@ app.post('/onCall', async (req, res, next) => {
     }
 });
 
-// イベント発生時のイベントハンドラー
+/**
+ * イベント発生時のイベントハンドラー
+ * @param {Object} req - リクエストオブジェクト
+ * @param {Object} res - レスポンスオブジェクト
+ * @param {Function} next - 次のミドルウェア関数
+ */
 app.post('/onEvent', async (req, res, next) => {
     console.log(`🐞 onEvent called`);
-    console.dir(req.body);
     try {
         console.log('🐞 userId is: ', req.query.userId || '');
         console.log('🐞 event status is: ', req.body.status);
@@ -267,7 +312,12 @@ app.post('/onEvent', async (req, res, next) => {
     }
 });
 
-// 録音データをファイルに保存
+/**
+ * 録音データをファイルに保存
+ * @param {string} conversation_uuid - 会話UUID
+ * @param {string} recording_url - 録音データのURL
+ * @returns {Promise<void>}
+ */
 async function saveRecordFile(conversation_uuid, recording_url) {
     return new Promise(async (resolve, reject) => {
         const jwt = generateJWT();
@@ -293,14 +343,18 @@ async function saveRecordFile(conversation_uuid, recording_url) {
     })
 }
 
-// 録音終了時のイベントハンドラー
+/**
+ * 録音終了時のイベントハンドラー
+ * @param {Object} req - リクエストオブジェクト
+ * @param {Object} res - レスポンスオブジェクト
+ * @param {Function} next - 次のミドルウェア関数
+ */
 app.post('/onEventRecorded', async (req, res, next) => {
     console.log(`🐞 onEventRecorded called`);
-    console.dir(req.body);
     try {
         // 録音データの保存
         await saveRecordFile(req.body.conversation_uuid, req.body.recording_url);
-        const recordingUrl = `${process.env.SERVER_URL}/tmp/${req.body.conversation_uuid}.mp3`;
+        const recordingUrl = `${process.env.VCR_INSTANCE_PUBLIC_URL}/tmp/${req.body.conversation_uuid}.mp3`;
         const headers = {
             'Content-Type': 'application/json',
             'Authorization': `Basic ${BASIC_AUTH}`
@@ -326,7 +380,11 @@ app.post('/onEventRecorded', async (req, res, next) => {
     }
 });
 
-// 音声認識データを取得
+/**
+ * 音声認識データを取得
+ * @param {string} transcription_url - 音声認識データのURL
+ * @returns {Promise<string>} フォーマットされた音声認識テキスト
+ */
 async function getTranscribedData(transcription_url) {
     return new Promise(async (resolve, reject) => {
         const jwt = generateJWT();
@@ -379,10 +437,14 @@ async function getTranscribedData(transcription_url) {
     });
 }
 
-// 音声認識終了時のイベントハンドラー
+/**
+ * 音声認識終了時のイベントハンドラー
+ * @param {Object} req - リクエストオブジェクト
+ * @param {Object} res - レスポンスオブジェクト
+ * @param {Function} next - 次のミドルウェア関数
+ */
 app.post('/onEventTranscribed', async (req, res, next) => {
     console.log(`🐞 onEventTranscribed called`);
-    console.dir(req.body);
     try {
         // 音声認識データの取得
         const transcript = await getTranscribedData(req.body.transcription_url);
@@ -410,7 +472,11 @@ app.post('/onEventTranscribed', async (req, res, next) => {
     }
 });
 
-// JWTの生成
+/**
+ * JWTの生成
+ * @param {string} username - ユーザー名（オプション）
+ * @returns {string} 生成されたJWTトークン
+ */
 function generateJWT(username) {
     const nowTime = Math.round(new Date().getTime() / 1000);
     const aclPaths = {
@@ -432,6 +498,11 @@ function generateJWT(username) {
     }
 }
 
+/**
+ * WebSocketテスト用エンドポイント
+ * @param {WebSocket} ws - WebSocketオブジェクト
+ * @param {Object} req - リクエストオブジェクト
+ */
 router.ws('/test', (ws, req) => {
     ws.send('Connected');
     console.log(`🐞 ws connected`);
