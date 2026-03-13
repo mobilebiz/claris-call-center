@@ -2,7 +2,6 @@
 <html>
 <head>
   <meta http-equiv="Content-Type" content="application/xhtml+xml; charset=UTF-8" />
-  <!-- ******* Load vonageClientSDK from a CDN ****** -->
   <script src="https://cdn.jsdelivr.net/npm/@vonage/client-sdk@latest/dist/vonageClientSDK.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -18,25 +17,23 @@
   <script type="text/javascript">
     let phone = '';
     let btnCall;
-    let btnInvite; // 着信ボタン (追加)
+    let btnInvite;
     let btnHangup;
-    let btnHold; // 保留ボタン
-    let btnTransfer; // 転送ボタン
-    let inputTransfer; // 転送先入力
+    let btnHold;
+    let btnTransfer;
+    let inputTransfer;
     let currentCall;
-    let currentLegId; // 自分のLeg ID
-    let userId = '';  // オペレーターID
+    let currentLegId;
+    let userId = '';
     const client = new vonageClientSDK.VonageClient();
-    const ringtone = new Audio('./ringtone.mp3'); 
+    const ringtone = new Audio('./ringtone.mp3');
 
-    // グローバルエラーハンドラー
     window.onerror = function(msg, url, line, col, error) {
       console.error(`❌ Global Error: ${msg} at ${line}:${col}`);
       alert(`JavaScriptエラー: ${msg} (Line: ${line})`);
       return false;
     };
 
-    // ページのロードが完了したとき
     window.onload = async () => {
       console.log(`🐞 window.onload started.`);
       btnCall = document.getElementById('btnCall');
@@ -45,10 +42,9 @@
       btnHold = document.getElementById('btnHold');
       btnTransfer = document.getElementById('btnTransfer');
       inputTransfer = document.getElementById('inputTransfer');
-      
+
       try {
-        console.log(`🐞 Initialization: userId search...`);
-        let params = new URLSearchParams(decodeURI(location.search))
+        let params = new URLSearchParams(decodeURI(location.search));
         params.forEach((value, key) => {
           if (key === 'userId') userId = value;
           if (key === 'phone') {
@@ -57,22 +53,18 @@
             btnCall.innerHTML = '発信';
             btnCall.hidden = false;
           }
-        })
+        });
 
         if (!userId) {
-          throw new Error('URLパラメータ "userId" が見つかりません。?userId=xxx を指定してください。');
+          throw new Error('URLパラメータ "userId" が見つかりません。');
         }
-        console.log(`🐞 Config: userId=${userId}, phone=${phone}`);
 
-        // JWTの取得
         console.log(`🐞 Fetching token for ${userId}...`);
         const response = await fetch(`./getToken?name=${userId}`);
         if (!response.ok) throw new Error(`トークン取得失敗: ${response.status}`);
         const data = await response.json();
         const jwt = data.jwt;
-        console.log(`🐞 Token received. Length: ${jwt.length}`);
-  
-        // --- イベントリスナーの登録 ---
+
         console.log("🐞 Registering event listeners...");
 
         client.on('legStatusUpdate', (callId, legId, status) => {
@@ -85,31 +77,17 @@
             btnCall.hidden = true;
             btnHangup.innerHTML = '呼び出し中...';
             btnHangup.hidden = false;
-          }
-          if (status === 'ANSWERED') {
+          } else if (status === 'ANSWERED') {
             btnHangup.innerHTML = '切断';
             btnHold.hidden = false;
-          }
-          if (status === 'COMPLETED') {
-            if (phone) btnCall.hidden = false;
-            btnHangup.hidden = true;
-            btnHold.hidden = true;
-            inputTransfer.hidden = true;
-            btnTransfer.hidden = true;
-            btnHold.innerHTML = '保留';
-            btnHold.classList.replace('bg-yellow-400', 'bg-gray-400');
+          } else if (status === 'COMPLETED') {
+            resetUI();
           }
         });
 
         client.on('callHangup', (callId, callQuality, reason) => {
           console.log(`🐞 [Event] callHangup: reason=${reason}`);
-          if (phone) btnCall.hidden = false;
-          btnHangup.hidden = true;
-          btnHold.hidden = true;
-          inputTransfer.hidden = true;
-          btnTransfer.hidden = true;
-          ringtone.pause();
-          ringtone.currentTime = 0;
+          resetUI();
         });
 
         client.on('callInvite', async (callId) => {
@@ -121,106 +99,88 @@
           try {
             ringtone.loop = true;
             await ringtone.play();
-            console.log("🐞 Ringtone playing.");
           } catch (e) {
-            console.warn("⚠️ Audio play blocked/failed:", e.message);
+            console.warn("⚠️ Audio play blocked:", e.message);
           }
         });
 
         client.on('callInviteCancel', (callId) => {
           console.log(`🐞 [Event] callInviteCancel: ${callId}`);
-          ringtone.pause();
-          btnInvite.hidden = true;
-          if (phone) btnCall.hidden = false;
+          resetUI();
         });
 
-        // セッションの作成
-        console.log("🐞 Creating session with JWT...");
-        const sessionId = await client.createSession(jwt);
-        console.log(`✅ Session created! ID: ${sessionId}`);
+        console.log("🐞 Creating session...");
+        await client.createSession(jwt);
+        console.log(`✅ Session created!`);
         
       } catch (error) {
         console.error(`❌ Initialization Error:`, error);
         alert(`初期化エラー: ${error.message}`);
       }
+    };
+
+    function resetUI() {
+      if (phone) btnCall.hidden = false;
+      btnCall.disabled = false;
+      btnCall.innerHTML = '発信';
+      btnInvite.hidden = true;
+      btnHangup.hidden = true;
+      btnHangup.innerHTML = '切断';
+      btnHold.hidden = true;
+      btnHold.innerHTML = '保留';
+      btnHold.classList.replace('bg-yellow-400', 'bg-gray-400');
+      inputTransfer.hidden = true;
+      btnTransfer.hidden = true;
+      ringtone.pause();
+      ringtone.currentTime = 0;
     }
 
     async function phoneCall() {
       try {
         btnCall.disabled = true;
         btnCall.innerHTML = '準備中...';
-
-        // 電話番号を指定して発信
-        client.serverCall({ to: phone }).then((callId) => {
-          console.log('🐞 Calling ...');
-          btnCall.innerHTML = '発信中...';
-          currentCall = callId;
-          phone = ''; // 電話番号をクリア（次回以降発信を防ぐ）
-        }).catch((error) => {
-          throw error;
-        });
-
+        const callId = await client.serverCall({ to: phone });
+        currentCall = callId;
+        console.log('🐞 outbound call started:', callId);
       } catch (error) {
         btnCall.disabled = false;
         btnCall.innerHTML = '発信';
-        console.error(`🐞 Error: ${error.message}`)        
+        console.error(`🐞 Error: ${error.message}`);
       }
     }
 
-		async function invite() {
+    async function invite() {
       try {
         btnInvite.disabled = true;
         btnInvite.innerHTML = '応答中...';
-        ringtone.pause();  // 着信音を停止
-        ringtone.currentTime = 0; // 再生位置をリセット
-        client.answer(currentCall).then(() => {
-          console.log('Call answered');
-          btnInvite.hidden = true;
-          btnInvite.innerHTML = '着信中...';
-          btnHangup.hidden = false;
-          btnHangup.disabled = false;
-          // 応答直後は保留ボタンのみ表示
-          btnHold.hidden = false;
-          inputTransfer.hidden = true;
-          btnTransfer.hidden = true;
-        }).catch((error) => {
-          throw error;
-        });
+        ringtone.pause();
+        ringtone.currentTime = 0;
+        await client.answer(currentCall);
+        console.log('Call answered');
+        btnInvite.hidden = true;
+        btnHangup.hidden = false;
+        btnHold.hidden = false;
       } catch (error) {
+        console.error(`🐞 Error: ${error.message}`);
         btnInvite.disabled = false;
         btnInvite.hidden = true;
-        console.error(`🐞 Error: ${error.message}`)        
       }
     }
 
-		async function hangup() {
+    async function hangup() {
       try {
         btnHangup.disabled = true;
         btnHangup.innerHTML = '切断中...';
-        client.hangup(currentCall).then(() => {
-          console.log('Call ended');
-          if (phone) {
-            btnCall.disabled = false;
-            btnCall.innerHTML = '発信';
-            btnCall.hidden = false;
-          }
-          btnHangup.hidden = true;
-          btnHangup.disabled = false;
-          btnHold.hidden = true;
-          inputTransfer.hidden = true;
-          btnTransfer.hidden = true;
-        }).catch((error) => {
-          throw error;
-        });
+        await client.hangup(currentCall);
+        console.log('Call ended');
+        resetUI();
       } catch (error) {
+        console.error(`🐞 Error: ${error.message}`);
         btnHangup.disabled = false;
         btnHangup.innerHTML = '切断';
-        btnHangup.hidden = false;
-        console.error(`🐞 Error: ${error.message}`)        
       }
     }
 
-    // 保留機能
     async function toggleHold() {
         const isHolding = btnHold.innerHTML === '再開';
         const action = isHolding ? 'unhold' : 'hold';
@@ -228,58 +188,40 @@
         try {
             console.log(`🐞 toggleHold: currentCall=${currentCall}, currentLegId=${currentLegId}, userId=${userId}`);
             
-            // 重要：送信直前に最新のセッション情報から自分の Leg ID を再取得・確定させる試みは継続
             if (client.session && client.session.legs) {
                 const legs = Object.keys(client.session.legs);
-                if (legs.length > 0) {
-                    if (!currentLegId || !client.session.legs[currentLegId]) {
-                        currentLegId = legs[0];
-                        console.log(`🐞 currentLegId recovered/forced from session: ${currentLegId}`);
-                    }
+                if (legs.length > 0 && (!currentLegId || !client.session.legs[currentLegId])) {
+                    currentLegId = legs[0];
                 }
             }
 
-            // ID が特定できなくてもアラートは出さず、サーバー側での User ID ベース判別に委ねる
-            if (!currentLegId) {
-                console.warn('⚠️ currentLegId is undefined. Relying on Server-side User ID lookup.');
-            }
-            
             const body = {
                 conversation_uuid: currentCall, 
-                leg_id: currentLegId, // 補助情報として送るが、サーバー側で無視・補完可能
-                operator_user_id: userId, // 自分の ID を送る
+                leg_id: currentLegId,
+                operator_user_id: userId,
                 action: action
             };
-            
-            console.log(`🐞 ${action} sending backend (User-based)...`, body);
 
             const response = await fetch('./hold', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             });
 
             if (response.ok) {
                 if (isHolding) {
                     btnHold.innerHTML = '保留';
-                    btnHold.classList.remove('bg-yellow-400');
-                    btnHold.classList.add('bg-gray-400');
-                    // 保留解除されたので転送UIを非表示
+                    btnHold.classList.replace('bg-yellow-400', 'bg-gray-400');
                     inputTransfer.hidden = true;
                     btnTransfer.hidden = true;
                 } else {
                     btnHold.innerHTML = '再開';
-                    btnHold.classList.remove('bg-gray-400');
-                    btnHold.classList.add('bg-yellow-400');
-                    // 保留されたので転送UIを表示
+                    btnHold.classList.replace('bg-gray-400', 'bg-yellow-400');
                     inputTransfer.hidden = false;
                     btnTransfer.hidden = false;
                 }
             } else {
                 const errText = await response.text();
-                console.error('Failed to hold/unhold:', errText);
                 alert('保留操作に失敗しました: ' + errText);
             }
         } catch (e) {
@@ -288,16 +230,9 @@
         }
     }
 
-    // 転送機能
     async function transferCall() {
         const destination = inputTransfer.value;
-        if (!destination) {
-            alert('転送先番号を入力してください');
-            return;
-        }
-        if (!confirm(`${destination} へ転送しますか？`)) {
-            return;
-        }
+        if (!destination || !confirm(`${destination} へ転送しますか？`)) return;
 
         try {
             const body = {
@@ -309,21 +244,11 @@
 
             const response = await fetch('./transfer', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             });
 
-            if (response.ok) {
-                console.log('Transfer initiated');
-                // 転送後は切断扱いになるか、自分で切るか。
-                // Backendで切断していなければ、ここで切断する。
-                // クライアント側で明示的に切断しても良い。
-                // 今回はサーバー側でやってないので、ここでハングアップを呼ぶのが無難だが、
-                // 転送成功ならそのまま通話終了フローに乗るはず。
-            } else {
-                console.error('Failed to transfer');
+            if (!response.ok) {
                 alert('転送に失敗しました');
             }
         } catch (e) {
@@ -333,15 +258,18 @@
     }
   </script>
 </head>
-<body class="center">
-  <div class="m-0 flex flex-col items-center gap-2">
-    <div class="flex gap-2">
-  	    <button id="btnCall" class="text-white font-bold bg-blue-400 p-2 rounded" hidden onclick="phoneCall()">発信</button>
-  	    <button id="btnInvite" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="invite()">着信中...</button>
-  	    <button id="btnHangup" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="hangup()">切断</button>
-        <button id="btnHold" class="text-white font-bold bg-gray-400 p-2 rounded" hidden onclick="toggleHold()">保留</button>
-        <input id="inputTransfer" type="text" class="border p-2 rounded" placeholder="転送先番号" hidden />
-        <button id="btnTransfer" class="text-white font-bold bg-green-400 p-2 rounded" hidden onclick="transferCall()">転送</button>
+<body class="center bg-gray-100 min-h-screen flex items-center justify-center">
+  <div class="bg-white p-8 rounded-xl shadow-lg flex flex-col items-center gap-6">
+    <h1 class="text-2xl font-bold text-gray-800">Call Center</h1>
+    <div class="flex flex-wrap justify-center gap-4">
+  	    <button id="btnCall" class="text-white font-bold bg-blue-500 hover:bg-blue-600 p-4 rounded-lg shadow transition-all duration-200" hidden onclick="phoneCall()">発信</button>
+  	    <button id="btnInvite" class="text-white font-bold bg-red-500 hover:bg-red-600 p-4 rounded-lg shadow animate-pulse" hidden onclick="invite()">着信に応答</button>
+  	    <button id="btnHangup" class="text-white font-bold bg-red-500 hover:bg-red-600 p-4 rounded-lg shadow transition-all duration-200" hidden onclick="hangup()">切断</button>
+        <button id="btnHold" class="text-white font-bold bg-gray-400 hover:bg-gray-500 p-4 rounded-lg shadow transition-all duration-200" hidden onclick="toggleHold()">保留</button>
+        <div class="flex flex-col gap-2">
+            <input id="inputTransfer" type="text" class="border-2 border-gray-300 p-4 rounded-lg focus:border-green-500 outline-none transition-all duration-200" placeholder="転送先番号" hidden />
+            <button id="btnTransfer" class="text-white font-bold bg-green-500 hover:bg-green-600 p-4 rounded-lg shadow transition-all duration-200" hidden onclick="transferCall()">転送実行</button>
+        </div>
     </div>
   </div>
 </body>
