@@ -600,7 +600,7 @@ app.post('/hold', async (req, res, next) => {
             // 顧客側に保留音を再生
             // streamUrl は public フォルダの ringtone.mp3 を使う
             // VCR_INSTANCE_PUBLIC_URL が設定されている前提
-            const streamUrl = `${process.env.VCR_INSTANCE_PUBLIC_URL}/ringtone.mp3`;
+            const streamUrl = `${process.env.VCR_INSTANCE_PUBLIC_URL}/hold_music.mp3`;
             await vonage.voice.streamAudio(customerLegId, streamUrl, 0); // 0 = loop infinitely
         } else if (action === 'unhold') {
             console.log(`🐞 Unholding call: ${customerLegId}`);
