@@ -74,8 +74,15 @@
         // コールステータスのイベントリスナー
         client.on('legStatusUpdate', (callId, legId, status) => {
           console.log(`🐞 Leg status update: ${status}, callId: ${callId}, legId: ${legId}`);
-          currentLegId = legId; // Leg IDを保存
-          console.log(`🐞 currentLegId updated to: ${currentLegId}`);
+          
+          // 自分のセッションに紐づく Leg ID の場合のみ、currentLegId を更新する
+          // これにより、顧客側の Leg ID が流れてきた時に上書きされるのを防ぐ
+          if (client.session && client.session.legs && client.session.legs[legId]) {
+              currentLegId = legId;
+              console.log(`🐞 currentLegId updated to (mine): ${currentLegId}`);
+          } else {
+              console.log(`🐞 Leg ID ${legId} belongs to another party. Skipping update.`);
+          }
 
           if (status === 'RINGING') { // 呼び出し中
             btnCall.hidden = true;

@@ -596,16 +596,28 @@ app.post('/hold', async (req, res, next) => {
         }
 
         if (action === 'hold') {
-            console.log(`🐞 Holding call: ${customerLegId}`);
-            // 顧客側に保留音を再生
-            // streamUrl は public フォルダの ringtone.mp3 を使う
-            // VCR_INSTANCE_PUBLIC_URL が設定されている前提
+            console.log(`🐞 Holding calls: operator=${leg_id}, customer=${customerLegId}`);
+            // 両方の Leg をミュート（任意。音を流すだけなら不要な場合もあるが、マイク音を遮断するために必要）
+            // await vonage.voice.updateCall(leg_id, { action: 'hold' }); 
+            // await vonage.voice.updateCall(customerLegId, { action: 'hold' });
+
+            // 両方に保留音を再生
             const streamUrl = `${process.env.VCR_INSTANCE_PUBLIC_URL}/hold_music.mp3`;
-            await vonage.voice.streamAudio(customerLegId, streamUrl, 0); // 0 = loop infinitely
+            console.log(`🐞 Streaming audio to both: ${streamUrl}`);
+            
+            // 並列で音声ストリームを開始
+            await Promise.all([
+                vonage.voice.streamAudio(leg_id, streamUrl, 0),
+                vonage.voice.streamAudio(customerLegId, streamUrl, 0)
+            ]);
         } else if (action === 'unhold') {
-            console.log(`🐞 Unholding call: ${customerLegId}`);
-            // 音声再生を停止
-            await vonage.voice.stopStreamAudio(customerLegId);
+            console.log(`🐞 Unholding calls: operator=${leg_id}, customer=${customerLegId}`);
+            
+            // 両方の音声ストリームを停止
+            await Promise.all([
+                vonage.voice.stopStreamAudio(leg_id),
+                vonage.voice.stopStreamAudio(customerLegId)
+            ]);
         }
 
         res.sendStatus(200);
