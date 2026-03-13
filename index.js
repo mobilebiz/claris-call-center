@@ -25,6 +25,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static('public'));
 
+// 相談転送（Warm Transfer）の状態管理用オブジェクト
+// Key: conversation_uuid (Vonage Conversation ID)
+// Value: { customerLegId, operatorLegId, transferLegId, isConsulting: bool }
+const consultationSessions = {};
+
 const session = vcr.createSession();
 const voice = new Voice(session);
 
@@ -290,21 +295,58 @@ app.post('/onCall', async (req, res, next) => {
  * @param {Function} next - 次のミドルウェア関数
  */
 app.post('/onEvent', async (req, res, next) => {
-    console.log(`🐞 onEvent called`);
+    console.log(`🐞 onEvent called: status=${req.body.status}, uuid=${req.body.uuid}, conv=${req.body.conversation_uuid}`);
     try {
-        console.log('🐞 userId is: ', req.query.userId || '');
-        console.log('🐞 event status is: ', req.body.status);
-        console.log('🐞 event direction is: ', req.body.direction);
+        const { status, direction, uuid, conversation_uuid } = req.body;
+        const { userId, isTransferLeg, confName } = req.query;
+
+        console.log('🐞 meta:', { userId, isTransferLeg, confName });
+
+        // 相談転送（Warm Transfer）の処理
+        // セッションの特定（URLパラメータの confName か、現在の conversation_uuid）
+        const targetConf = confName || conversation_uuid;
+        const session = consultationSessions[targetConf];
+
+        if (session && status === 'completed') {
+            console.log(`🐞 Consultation session event detected: ${status} on leg ${uuid}`);
+            
+            if (uuid === session.customerLegId) {
+                // 1. お客様が切断した場合 -> 全員切断
+                console.log(`🐞 Customer disconnected during consultation. Hanging up everyone.`);
+                const hangups = [];
+                if (session.operatorLegId) hangups.push(vonage.voice.hangupCall(session.operatorLegId).catch(() => {}));
+                if (session.transferLegId) hangups.push(vonage.voice.hangupCall(session.transferLegId).catch(() => {}));
+                await Promise.allSettled(hangups);
+                delete consultationSessions[targetConf];
+            } 
+            else if (uuid === session.operatorLegId || uuid === session.transferLegId) {
+                // 2. オペレーターまたは転送先が切断した場合 -> 残った方をお客様と繋ぐ
+                const remainingLegId = (uuid === session.operatorLegId) ? session.transferLegId : session.operatorLegId;
+                console.log(`🐞 Consultant/Operator disconnected. Connecting customer ${session.customerLegId} to remaining leg ${remainingLegId}`);
+                
+                if (session.customerLegId) {
+                    // お客様の保留を解除（NCCOを更新して保留音なしの会議に参加させる）
+                    const resumeNcco = [{ action: 'conversation', name: targetConf }];
+                    try {
+                        await vonage.voice.transferCallWithNCCO(session.customerLegId, resumeNcco);
+                        console.log(`🐞 Customer leg ${session.customerLegId} resumed.`);
+                    } catch (err) {
+                        console.error(`🐞 Failed to resume customer leg:`, err.message);
+                    }
+                }
+                delete consultationSessions[targetConf];
+            }
+        }
+
         // 応答時の処理
-        if (req.body.status === 'answered' && req.body.direction === 'outbound') {
-            // if (req.body.status === 'answered') {
+        if (status === 'answered' && direction === 'outbound') {
             // オペレーターのステータス変更
-            await updateOperatorStatus(req.body.conversation_uuid, req.body.from, '通話中', req.query.userId);
+            await updateOperatorStatus(conversation_uuid, req.body.from || '', '通話中', userId);
         }
         // 通話終了時の処理
-        if (req.body.status === 'completed' && req.body.direction === 'outbound') {
+        if (status === 'completed' && direction === 'outbound') {
             // オペレーターのステータス変更
-            await updateOperatorStatus(req.body.conversation_uuid, '', '待受中', req.query.userId);
+            await updateOperatorStatus(conversation_uuid, '', '待受中', userId);
         }
         res.sendStatus(200);
     } catch (e) {
@@ -678,52 +720,89 @@ app.post('/hold', async (req, res, next) => {
 });
 
 /**
- * 転送機能のエンドポイント
+ * 転送機能のエンドポイント（相談転送 / Warm Transfer）
  */
 app.post('/transfer', async (req, res, next) => {
-    console.log('🐞 /transfer called', req.body);
+    console.log('🐞 /transfer called (Consultative)', req.body);
     try {
         const { conversation_uuid, leg_id, destination_number, operator_user_id } = req.body;
-        // 会話内の全 Leg を取得し、オペレーター、顧客、およびビジネス番号を特定
-        const { customerLegId, businessNumber } = await getCallLegs(conversation_uuid, leg_id, operator_user_id);
+        // 会話内の全 Leg を取得
+        const { operatorLegId, customerLegId, businessNumber } = await getCallLegs(conversation_uuid, leg_id, operator_user_id);
 
-        if (!customerLegId) {
-             console.error('Customer Not Found');
-             res.status(404).send('Customer Not Found');
+        if (!customerLegId || !operatorLegId) {
+             console.error('Required Legs Not Found for transfer');
+             res.status(404).send('Customer or Operator Leg Not Found');
              return;
         }
-        
+
+        const confName = conversation_uuid; // 会議名は Conversation ID を流用
         const finalDest = formatToE164(destination_number);
         const finalFrom = formatToE164(businessNumber) || process.env.VONAGE_NUMBER;
 
-        console.log(`🐞 Transferring call: ${customerLegId} to ${finalDest} (from: ${finalFrom})`);
-        
-        // 転送先のNCCOを作成
-        const ncco = [
+        console.log(`🐞 Starting Consultative Transfer: conv=${confName}, customer=${customerLegId}, operator=${operatorLegId}`);
+
+        // 状態の記録
+        consultationSessions[confName] = {
+            customerLegId,
+            operatorLegId,
+            transferLegId: null, // 発信後に確定させる
+            isConsulting: true
+        };
+
+        // 1. まず現在の保留音を止める（念のため）
+        await Promise.allSettled([
+            vonage.voice.stopStreamAudio(operatorLegId).catch(() => {}),
+            vonage.voice.stopStreamAudio(customerLegId).catch(() => {})
+        ]);
+
+        // 2. お客様を会議室へ移動（保留音付き）
+        const customerNcco = [
+            {
+                action: 'conversation',
+                name: confName,
+                musicOnHoldUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/hold_music.mp3`]
+            }
+        ];
+        await vonage.voice.transferCallWithNCCO(customerLegId, customerNcco);
+
+        // 3. オペレーターを会議室へ移動
+        const operatorNcco = [
+            {
+                action: 'conversation',
+                name: confName
+            }
+        ];
+        await vonage.voice.transferCallWithNCCO(operatorLegId, operatorNcco);
+
+        // 4. 転送先へ発信（応答時に会議室へ参加させる）
+        const inviteNcco = [
             {
                 action: 'talk',
-                text: '担当者にお繋ぎします。しばらくお待ちください。',
-                language: 'ja-JP',
-                style: 0
+                text: '通話を転送します。少々お待ちください。',
+                language: 'ja-JP'
             },
             {
-                action: 'connect',
-                from: finalFrom,
-                eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?userId=${operator_user_id}`],
-                endpoint: [
-                    {
-                        type: 'phone',
-                        number: finalDest
-                    }
-                ]
+                action: 'conversation',
+                name: confName
             }
         ];
 
-        console.log(`🐞 Sending Transfer NCCO:`, JSON.stringify(ncco, null, 2));
+        try {
+            const result = await vonage.voice.createOutboundCall({
+                to: [{ type: 'phone', number: finalDest }],
+                from: { type: 'phone', number: finalFrom },
+                ncco: inviteNcco,
+                eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?userId=${operator_user_id}&isTransferLeg=true&confName=${confName}`]
+            });
+            console.log(`🐞 Outbound call to ${finalDest} initiated: uuid=${result.uuid}`);
+            consultationSessions[confName].transferLegId = result.uuid;
+        } catch (err) {
+            console.error(`🐞 Failed to initiate outbound call:`, err.message);
+            // 発信失敗時はお客様を元に戻すなどの処理が必要だが、一旦エラーを返す
+            res.status(500).send('Failed to dial destination');
+            return;
+        }
 
-        // 転送実行
-        await vonage.voice.transferCallWithNCCO(customerLegId, ncco);
-        
         res.sendStatus(200);
 
     } catch (e) {
