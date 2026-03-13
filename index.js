@@ -536,14 +536,26 @@ async function getCallLegs(conversation_uuid, operator_leg_id_hint, operator_use
 
         // 3. User ID またはヒントを用いてオペレーターの Leg を確定させる
         for (const call of calls) {
+            console.log(`🐞 Checking leg ${call.uuid}: to=${JSON.stringify(call.to)}, from=${JSON.stringify(call.from)}`);
+            
+            // エンドポイントオブジェクト（to/from）から識別子を抽出するヘルパー
+            const getIdentifier = (endpoint) => {
+                if (!endpoint) return '';
+                // number (phone), user (app), uri (websocket) など、存在するものを繋げてチェック
+                return (endpoint.number || endpoint.user || endpoint.uri || '').toString();
+            };
+
+            const toId = getIdentifier(call.to);
+            const fromId = getIdentifier(call.from);
+
             // to または from にオペレーターの User ID が含まれているか（App Leg の場合）
-            const isOperator = (call.to && call.to.includes(operator_user_id)) || 
-                             (call.from && call.from.includes(operator_user_id)) ||
+            const isOperator = toId.includes(operator_user_id) || 
+                             fromId.includes(operator_user_id) ||
                              (call.uuid === operator_leg_id_hint);
             
             if (isOperator) {
                 operatorLegId = call.uuid;
-                console.log(`🐞 Identified Operator Leg: ${operatorLegId}`);
+                console.log(`🐞 Identified Operator Leg: ${operatorLegId} (to: ${toId}, from: ${fromId})`);
             }
         }
 
