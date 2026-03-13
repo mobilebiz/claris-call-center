@@ -89,10 +89,10 @@
           }
           if (status === 'ANSWERED') {  // 相手が応答した
             btnHangup.innerHTML = '切断';
-            // 通話確立したので保留・転送UIを表示
+            // 通話確立したが、最初は保留ボタンのみ表示（転送は保留中のみ）
             btnHold.hidden = false;
-            inputTransfer.hidden = false;
-            btnTransfer.hidden = false;
+            inputTransfer.hidden = true;
+            btnTransfer.hidden = true;
           }
           if (status === 'COMPLETED') { // 通話が終了
             if (phone) {
@@ -199,10 +199,10 @@
           btnInvite.innerHTML = '着信中...';
           btnHangup.hidden = false;
           btnHangup.disabled = false;
-          // 応答したので保留・転送UIを表示
+          // 応答直後は保留ボタンのみ表示
           btnHold.hidden = false;
-          inputTransfer.hidden = false;
-          btnTransfer.hidden = false;
+          inputTransfer.hidden = true;
+          btnTransfer.hidden = true;
         }).catch((error) => {
           throw error;
         });
@@ -283,10 +283,16 @@
                     btnHold.innerHTML = '保留';
                     btnHold.classList.remove('bg-yellow-400');
                     btnHold.classList.add('bg-gray-400');
+                    // 保留解除されたので転送UIを非表示
+                    inputTransfer.hidden = true;
+                    btnTransfer.hidden = true;
                 } else {
                     btnHold.innerHTML = '再開';
                     btnHold.classList.remove('bg-gray-400');
                     btnHold.classList.add('bg-yellow-400');
+                    // 保留されたので転送UIを表示
+                    inputTransfer.hidden = false;
+                    btnTransfer.hidden = false;
                 }
             } else {
                 const errText = await response.text();
