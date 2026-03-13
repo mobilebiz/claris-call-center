@@ -268,6 +268,9 @@ app.post('/onCall', async (req, res, next) => {
                     split: 'conversation',
                     transcription: {
                         language: 'ja-JP',
+                        eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEventTranscribed`]
+                    }
+                },
                 {
                     action: 'connect',
                     eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?userId=${userId}`],
