@@ -304,8 +304,11 @@ app.post('/onEvent', async (req, res, next) => {
 
         // 相談転送（Warm Transfer）の処理
         // セッションの特定（URLパラメータの confName か、現在の conversation_uuid）
-        const targetConf = confName || conversation_uuid;
-        const session = consultationSessions[targetConf];
+        let targetConfId = confName || conversation_uuid;
+        if (targetConfId && targetConfId.startsWith('CONF-')) {
+            targetConfId = targetConfId.replace('CONF-', '');
+        }
+        const session = consultationSessions[targetConfId];
 
         if (session && status === 'completed') {
             console.log(`🐞 Consultation event: status=${status}, uuid=${uuid}, session.customerLegId=${session.customerLegId}`);
@@ -317,7 +320,7 @@ app.post('/onEvent', async (req, res, next) => {
                 if (session.operatorLegId) hangups.push(vonage.voice.hangupCall(session.operatorLegId).catch(() => {}));
                 if (session.transferLegId) hangups.push(vonage.voice.hangupCall(session.transferLegId).catch(() => {}));
                 await Promise.allSettled(hangups);
-                delete consultationSessions[targetConf];
+                delete consultationSessions[targetConfId];
             } 
             else if (uuid === session.operatorLegId || uuid === session.transferLegId) {
                 // 2. オペレーターまたは転送先が切断した場合 -> 残った方をお客様と繋ぐ
@@ -326,21 +329,21 @@ app.post('/onEvent', async (req, res, next) => {
                 
                 if (session.customerLegId && remainingLegId) {
                     console.log(`🐞 Reconnecting customer ${session.customerLegId} to remaining leg ${remainingLegId}`);
-                    // お客様の保留を解除（NCCOを更新。会議室名に CONF- を付与して一意性を確保）
+                    // お客様の保留を解除（NCCOを更新。正規化後の targetConfId を使用）
                     const resumeNcco = [{ 
                         action: 'conversation', 
-                        name: `CONF-${targetConf}`,
+                        name: `CONF-${targetConfId}`,
                         startConferenceOnEnter: true
                     }];
                     try {
                         await vonage.voice.transferCallWithNCCO(session.customerLegId, resumeNcco);
-                        console.log(`🐞 Customer leg ${session.customerLegId} resumed into conference CONF-${targetConf}`);
+                        console.log(`🐞 Customer leg ${session.customerLegId} resumed into conference CONF-${targetConfId}`);
                     } catch (err) {
                         console.error(`🐞 Failed to resume customer leg:`, err.message);
                     }
                 }
                 // 重要: どちらかが切れても相談セッションとしては終了
-                delete consultationSessions[targetConf];
+                delete consultationSessions[targetConfId];
             }
         }
 
