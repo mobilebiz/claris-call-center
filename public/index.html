@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html">
+<html>
 <head>
   <meta http-equiv="Content-Type" content="application/xhtml+xml; charset=UTF-8" />
   <!-- ******* Load vonageClientSDK from a CDN ****** -->
@@ -113,10 +113,6 @@
           }
         });
 
-        // 自分の Leg ID が undefined の場合の予備取得ロジック（デバッグ用）
-        client.on('callInvite', async (callId) => {
-            console.log(`🐞 Incoming call session check:`, client.session);
-        });
 
         // 通話が切断されたときのイベントリスナー
         client.on('callHangup', (callId, callQuality, reason) => {
@@ -140,7 +136,7 @@
 
         // 着信したときのイベントリスナー
         client.on('callInvite', async (callId) => {
-          console.log(`🐞 Incoming call.`)
+          console.log(`🐞 Incoming call. Session check:`, client.session);
           // await wait(1000); // 1秒待機(FileMaker対策)
           currentCall = callId;
           btnCall.disabled = true;
