@@ -507,20 +507,22 @@ function generateJWT(username) {
  */
 async function getCallLegs(conversation_uuid, operator_leg_id_hint, operator_user_id) {
     try {
-        console.log(`🐞 getCallLegs called. conv: ${conversation_uuid}, operator_user: ${operator_user_id}`);
+        console.log(`🐞 getCallLegs called. conv_uuid_or_leg: ${conversation_uuid}, user: ${operator_user_id}, hint: ${operator_leg_id_hint}`);
         
         let targetConvId = conversation_uuid;
         let calls = [];
+        let inputWasLegId = false;
 
-        // 1. まず入力された ID が直接の Leg ID かどうか確認し、そうなら所属する Conversation ID を特定する
+        // 1. まず入力された ID が直接の Leg ID かどうか確認
         try {
-            const directCall = await vonage.voice.getCall(conversation_uuid);
-            if (directCall) {
-                console.log(`🐞 ${conversation_uuid} is a Leg ID in conversation ${directCall.conversationUUID}`);
-                targetConvId = directCall.conversationUUID;
+            const complement = await vonage.voice.getCall(conversation_uuid);
+            if (complement) {
+                console.log(`🐞 input ${conversation_uuid} is a validated Leg ID. Conv: ${complement.conversationUUID}`);
+                targetConvId = complement.conversationUUID;
+                inputWasLegId = true;
             }
         } catch (e) {
-            console.log(`🐞 ${conversation_uuid} is not a valid Leg ID or error fetching call.`);
+            console.log(`🐞 input ${conversation_uuid} is not a direct Leg ID or lookup failed.`);
         }
 
         // 2. Conversation 内の全 Leg を検索
@@ -529,49 +531,59 @@ async function getCallLegs(conversation_uuid, operator_leg_id_hint, operator_use
             calls = page._embedded.calls;
         }
 
-        console.log(`🐞 Found ${calls.length} legs in conversation ${targetConvId}`);
+        console.log(`🐞 Found ${calls.length} legs for conv ${targetConvId}`);
         
-        let operatorLegId = operator_leg_id_hint;
+        let operatorLegId = null;
         let customerLegId = null;
 
-        // 3. User ID またはヒントを用いてオペレーターの Leg を確定させる
+        // 3. オペレーターの Leg を特定する（優先順位: 入力ID自身 -> ヒント -> ユーザーIDマッチ）
+        if (inputWasLegId) {
+            operatorLegId = conversation_uuid;
+        } else if (operator_leg_id_hint) {
+            operatorLegId = operator_leg_id_hint;
+        }
+
         for (const call of calls) {
-            console.log(`🐞 Checking leg ${call.uuid}: to=${JSON.stringify(call.to)}, from=${JSON.stringify(call.from)}`);
+            // 詳細ログ（全プロパティ確認用）
+            console.log(`🐞 Analyzing leg ${call.uuid}: status=${call.status}, to=${JSON.stringify(call.to)}, from=${JSON.stringify(call.from)}`);
             
-            // エンドポイントオブジェクト（to/from）から識別子を抽出するヘルパー
+            if (operatorLegId) continue; // 既に特定済みならスキップ
+
             const getIdentifier = (endpoint) => {
                 if (!endpoint) return '';
-                // number (phone), user (app), uri (websocket) など、存在するものを繋げてチェック
                 return (endpoint.number || endpoint.user || endpoint.uri || '').toString();
             };
 
-            const toId = getIdentifier(call.to);
-            const fromId = getIdentifier(call.from);
-
-            // to または from にオペレーターの User ID が含まれているか（App Leg の場合）
-            const isOperator = toId.includes(operator_user_id) || 
-                             fromId.includes(operator_user_id) ||
-                             (call.uuid === operator_leg_id_hint);
-            
-            if (isOperator) {
+            const identifiers = getIdentifier(call.to) + getIdentifier(call.from);
+            if (identifiers.includes(operator_user_id)) {
                 operatorLegId = call.uuid;
-                console.log(`🐞 Identified Operator Leg: ${operatorLegId} (to: ${toId}, from: ${fromId})`);
+                console.log(`🐞 Identified Operator Leg by UserID: ${operatorLegId}`);
             }
         }
 
-        // 4. 残った方を顧客として特定
+        // 4. 顧客の Leg を特定する（オペレーターではない方）
+        // ステータスについては、切断(completed)以外であれば対象とする
         for (const call of calls) {
-            if (call.uuid !== operatorLegId && call.status === 'started') {
+            if (call.uuid !== operatorLegId && call.status !== 'completed') {
                 customerLegId = call.uuid;
                 console.log(`🐞 Identified Customer Leg: ${customerLegId}`);
                 break;
             }
         }
 
+        // 特殊ケース：2つしかなくて、片方がオペレーターなら、ステータスに関わらずもう片方が顧客
+        if (calls.length === 2 && operatorLegId && !customerLegId) {
+            const other = calls.find(c => c.uuid !== operatorLegId);
+            if (other) {
+                customerLegId = other.uuid;
+                console.log(`🐞 Identified Customer Leg by elimination: ${customerLegId}`);
+            }
+        }
+
         return { operatorLegId, customerLegId };
     } catch (e) {
         console.error(`🐞 Error in getCallLegs:`, e);
-        return { operatorLegId: operator_leg_id_hint, customerLegId: null };
+        return { operatorLegId: null, customerLegId: null };
     }
 }
 
