@@ -77,19 +77,9 @@
           
           // 自分のセッションに紐づく Leg ID の場合のみ、currentLegId を更新する
           // Vonage Client SDK では、client.session.legs に自分の Leg ID がキーとして存在する
-          if (client.session && client.session.legs) {
-              const myLegs = Object.keys(client.session.legs);
-              if (myLegs.includes(legId)) {
-                  currentLegId = legId;
-                  console.log(`🐞 currentLegId updated to (mine): ${currentLegId}`);
-              } else {
-                  console.log(`🐞 Leg ID ${legId} belongs to another party or is not in session yet.`);
-                  // もし currentLegId がまだ空なら、このタイミングで session から拾っておく
-                  if (!currentLegId && myLegs.length > 0) {
-                      currentLegId = myLegs[0];
-                      console.log(`🐞 currentLegId initialized from session: ${currentLegId}`);
-                  }
-              }
+          if (client.session && client.session.legs && client.session.legs[legId]) {
+              currentLegId = legId;
+              console.log(`🐞 currentLegId updated to (mine from event): ${currentLegId}`);
           }
 
           if (status === 'RINGING') { // 呼び出し中
@@ -259,19 +249,22 @@
         try {
             console.log(`🐞 toggleHold: currentCall=${currentCall}, currentLegId=${currentLegId}`);
             
-            // もし currentLegId が取得できていなければ、セッションから探す試み
-            if (!currentLegId && client.session && client.session.legs) {
-                console.log('🐞 Attempting to find legId from session...', client.session.legs);
-                // セッション内の最初の Leg をとりあえず使ってみる（通常1つのはず）
+            // 重要：送信直前に最新のセッション情報から自分の Leg ID を再取得・確定させる
+            if (client.session && client.session.legs) {
                 const legs = Object.keys(client.session.legs);
                 if (legs.length > 0) {
-                    currentLegId = legs[0];
-                    console.log(`🐞 Recovered currentLegId from session: ${currentLegId}`);
+                    // もし現在の ID がセッションに含まれていない、または空なら、セッションから拾う
+                    if (!currentLegId || !client.session.legs[currentLegId]) {
+                        currentLegId = legs[0];
+                        console.log(`🐞 currentLegId forced from session: ${currentLegId}`);
+                    }
                 }
             }
 
             if (!currentLegId) {
-                console.warn('⚠️ currentLegId is still undefined. Hold might fail.');
+                console.error('❌ Error: currentLegId is still undefined. Session:', client.session);
+                alert('エラー：自身の通話IDが特定できません。ページをリロードして再度お試しください。');
+                return;
             }
             
             const body = {

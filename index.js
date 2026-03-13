@@ -543,34 +543,41 @@ async function getCustomerLegId(conversation_uuid, operator_leg_id) {
 
         // 3. 検索で見つからない場合のフォールバック: ID自体がLeg IDである可能性をチェック
         if (calls.length === 0) {
-            console.log(`🐞 Still 0 found. Checking if ${conversation_uuid} is a direct Leg ID...`);
+            console.log(`🐞 Search found 0. Checking if ${conversation_uuid} is a direct Leg ID...`);
             try {
                 const directCall = await vonage.voice.getCall(conversation_uuid);
                 if (directCall) {
-                    console.log(`🐞 ${conversation_uuid} is a direct Leg ID.`);
-                    // これが operator_leg_id でないなら、これが顧客の Leg ID
-                    if (directCall.uuid !== operator_leg_id) return directCall.uuid;
-                    
-                    // これが operator_leg_id なら、同じ会話の別の Leg を探す
-                    const convId = directCall.conversationUuid;
-                    const convPage = await vonage.voice.search({ conversationUuid: convId });
+                    console.log(`🐞 ${conversation_uuid} is a Leg ID in conversation ${directCall.conversationUuid}`);
+                    // 入力された conversation_uuid 自体が Leg ID だった場合、
+                    // その会話に関連する「すべての Leg」を検索して、オペレーターではない方を探す
+                    const convPage = await vonage.voice.search({ conversationUuid: directCall.conversationUuid });
                     if (convPage && convPage._embedded && convPage._embedded.calls) {
-                        const other = convPage._embedded.calls.find(c => c.uuid !== operator_leg_id);
-                        if (other) return other.uuid;
+                        calls = convPage._embedded.calls;
                     }
                 }
             } catch (err) {
-                console.log(`🐞 ${conversation_uuid} is not a valid Leg ID.`);
+                console.log(`🐞 ${conversation_uuid} is not a valid Leg ID or Conversation UUID.`);
             }
         }
 
-        console.log(`🐞 Total candidate calls found: ${calls.length}`);
+        console.log(`🐞 Candidates for search: ${calls.length}`);
+        // もしオペレーターIDが不明な場合、自分（conversation_uuid が LegID の場合）を除外する試み
+        const excludeId = operator_leg_id || (calls.some(c => c.uuid === conversation_uuid) ? conversation_uuid : null);
+        console.log(`🐞 Excluding ID: ${excludeId}`);
+
         for (const call of calls) {
-            if (call.uuid !== operator_leg_id) {
-                console.log(`🐞 Customer leg detected: ${call.uuid}`);
+            if (call.uuid !== excludeId && call.status === 'started') {
+                console.log(`🐞 Customer leg candidate found: ${call.uuid}`);
                 return call.uuid;
             }
         }
+        
+        // 最後の手段：もし2つしかなくて、片方が分かっているなら、消去法でもう片方を返す
+        if (calls.length === 2) {
+             const other = calls.find(c => c.uuid !== excludeId);
+             if (other) return other.uuid;
+        }
+
         return null;
     } catch (e) {
         console.error(e);
@@ -612,10 +619,11 @@ app.post('/hold', async (req, res, next) => {
             }
 
             try {
-                await Promise.all(streams);
+                // 片方が失敗しても（例：operator_leg_id が未定義で404になっても）、もう片方の再生を試みる
+                await Promise.allSettled(streams);
+                console.log(`🐞 Audio stream requests processed.`);
             } catch (err) {
-                console.error(`🐞 Error during streamAudio:`, err.message);
-                // 片方が失敗しても、もう片方が成功している可能性があるので続行
+                console.error(`🐞 Critical error during streamAudio:`, err.message);
             }
         } else if (action === 'unhold') {
             console.log(`🐞 Unholding calls: operator=${leg_id}, customer=${customerLegId}`);
@@ -624,9 +632,11 @@ app.post('/hold', async (req, res, next) => {
             if (leg_id) stops.push(vonage.voice.stopStreamAudio(leg_id).catch(e => console.log(`🐞 Stop operator stream failed: ${e.message}`)));
             if (customerLegId) stops.push(vonage.voice.stopStreamAudio(customerLegId).catch(e => console.log(`🐞 Stop customer stream failed: ${e.message}`)));
             
-            await Promise.all(stops);
+            await Promise.allSettled(stops);
         }
 
+        // 顧客への再生が試みられた、あるいはアクションが受理されたのであれば、
+        // クライアント側には成功を返し、ボタン表示の切り替えを許可する。
         res.sendStatus(200);
 
     } catch (e) {
