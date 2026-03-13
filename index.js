@@ -516,10 +516,12 @@ async function getCallLegs(conversation_uuid, operator_leg_id_hint, operator_use
         try {
             const directCall = await vonage.voice.getCall(conversation_uuid);
             if (directCall) {
-                console.log(`🐞 ${conversation_uuid} is a Leg ID in conversation ${directCall.conversationUuid}`);
-                targetConvId = directCall.conversationUuid;
+                console.log(`🐞 ${conversation_uuid} is a Leg ID in conversation ${directCall.conversationUUID}`);
+                targetConvId = directCall.conversationUUID;
             }
-        } catch (e) {}
+        } catch (e) {
+            console.log(`🐞 ${conversation_uuid} is not a valid Leg ID or error fetching call.`);
+        }
 
         // 2. Conversation 内の全 Leg を検索
         const page = await vonage.voice.search({ conversationUuid: targetConvId });
