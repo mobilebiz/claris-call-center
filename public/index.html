@@ -29,8 +29,16 @@
     const client = new vonageClientSDK.VonageClient();
     const ringtone = new Audio('./ringtone.mp3'); 
 
+    // グローバルエラーハンドラー
+    window.onerror = function(msg, url, line, col, error) {
+      console.error(`❌ Global Error: ${msg} at ${line}:${col}`);
+      alert(`JavaScriptエラー: ${msg} (Line: ${line})`);
+      return false;
+    };
+
     // ページのロードが完了したとき
     window.onload = async () => {
+      console.log(`🐞 window.onload started.`);
       btnCall = document.getElementById('btnCall');
       btnInvite = document.getElementById('btnInvite');
       btnHangup = document.getElementById('btnHangup');
@@ -39,12 +47,10 @@
       inputTransfer = document.getElementById('inputTransfer');
       
       try {
-        console.log(`🐞 Initialization started. userId lookup...`);
+        console.log(`🐞 Initialization: userId search...`);
         let params = new URLSearchParams(decodeURI(location.search))
         params.forEach((value, key) => {
-          if (key === 'userId') {
-            userId = value;
-          }
+          if (key === 'userId') userId = value;
           if (key === 'phone') {
             phone = value.charAt(0) === '0' ? '+81' + value.slice(1) : value;
             btnCall.disabled = false;
@@ -53,27 +59,26 @@
           }
         })
 
-        if (userId === '') {
-          throw new Error('URLパラメータ "userId" が設定されていません。');
+        if (!userId) {
+          throw new Error('URLパラメータ "userId" が見つかりません。?userId=xxx を指定してください。');
         }
-        console.log(`🐞 userId: ${userId} phone: ${phone}`);
+        console.log(`🐞 Config: userId=${userId}, phone=${phone}`);
 
-        // JWTの取得 (中略・既存のjwt取得ロジックは維持)
+        // JWTの取得
+        console.log(`🐞 Fetching token for ${userId}...`);
         const response = await fetch(`./getToken?name=${userId}`);
-        if (!response.ok) throw new Error(`Token fetch failed: ${response.status}`);
+        if (!response.ok) throw new Error(`トークン取得失敗: ${response.status}`);
         const data = await response.json();
         const jwt = data.jwt;
+        console.log(`🐞 Token received. Length: ${jwt.length}`);
   
-        // --- イベントリスナーの登録をセッション作成の前に行う ---
+        // --- イベントリスナーの登録 ---
         console.log("🐞 Registering event listeners...");
 
-        // コールステータスのイベントリスナー
         client.on('legStatusUpdate', (callId, legId, status) => {
-          console.log(`🐞 Leg status update: ${status}, callId: ${callId}, legId: ${legId}`);
-          
+          console.log(`🐞 [Event] legStatusUpdate: ${status}, legId: ${legId}`);
           if (client.session && client.session.legs && client.session.legs[legId]) {
               currentLegId = legId;
-              console.log(`🐞 currentLegId updated to (mine): ${currentLegId}`);
           }
 
           if (status === 'RINGING') {
@@ -84,71 +89,56 @@
           if (status === 'ANSWERED') {
             btnHangup.innerHTML = '切断';
             btnHold.hidden = false;
-            inputTransfer.hidden = true;
-            btnTransfer.hidden = true;
           }
           if (status === 'COMPLETED') {
-            if (phone) {
-              btnCall.disabled = false;
-              btnCall.innerHTML = '発信';
-              btnCall.hidden = false;
-            }
+            if (phone) btnCall.hidden = false;
             btnHangup.hidden = true;
-            btnHangup.innerHTML = '切断';
             btnHold.hidden = true;
             inputTransfer.hidden = true;
             btnTransfer.hidden = true;
             btnHold.innerHTML = '保留';
-            btnHold.classList.remove('bg-yellow-400');
-            btnHold.classList.add('bg-gray-400');
+            btnHold.classList.replace('bg-yellow-400', 'bg-gray-400');
           }
         });
 
-        // 通話が切断されたとき
         client.on('callHangup', (callId, callQuality, reason) => {
-          console.log(`🐞 Call ended. reason: ${reason}`);
-          if (phone) {
-            btnCall.disabled = false;
-            btnCall.innerHTML = '発信';
-            btnCall.hidden = false;
-          }
+          console.log(`🐞 [Event] callHangup: reason=${reason}`);
+          if (phone) btnCall.hidden = false;
           btnHangup.hidden = true;
           btnHold.hidden = true;
-          inputTransfer.hidden = true;
-          btnTransfer.hidden = true;
+          ringtone.pause();
+          ringtone.currentTime = 0;
         });
 
-        // 着信したとき
         client.on('callInvite', async (callId) => {
-          console.log(`🐞 Incoming call: ${callId}`);
+          console.log(`🐞 [Event] callInvite! callId:`, callId);
           currentCall = callId;
-          btnCall.disabled = true;
           btnCall.hidden = true;
           btnInvite.disabled = false;
           btnInvite.hidden = false;
-          ringtone.loop = true;
-          ringtone.play(); 
-        });
-
-        // 着信キャンセル
-        client.on('callInviteCancel', (callId) => {
-          console.log(`🐞 Call invite canceled: ${callId}`);
-          ringtone.pause();
-          ringtone.currentTime = 0;
-          btnInvite.hidden = true;
-          if (phone) {
-            btnCall.disabled = false;
-            btnCall.hidden = false;
+          try {
+            ringtone.loop = true;
+            await ringtone.play();
+            console.log("🐞 Ringtone playing.");
+          } catch (e) {
+            console.warn("⚠️ Audio play blocked/failed:", e.message);
           }
         });
 
-        // セッションの作成 (await する)
-        console.log("🐞 Creating session...");
+        client.on('callInviteCancel', (callId) => {
+          console.log(`🐞 [Event] callInviteCancel: ${callId}`);
+          ringtone.pause();
+          btnInvite.hidden = true;
+          if (phone) btnCall.hidden = false;
+        });
+
+        // セッションの作成
+        console.log("🐞 Creating session with JWT...");
         const sessionId = await client.createSession(jwt);
-        console.log(`🐞 Session created successfully: ${sessionId}`);
+        console.log(`✅ Session created! ID: ${sessionId}`);
         
       } catch (error) {
-        console.error(`🐞 Initialization Error: ${error.message}`);
+        console.error(`❌ Initialization Error:`, error);
         alert(`初期化エラー: ${error.message}`);
       }
     }

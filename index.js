@@ -755,18 +755,29 @@ app.post('/transfer', async (req, res, next) => {
             vonage.voice.stopStreamAudio(customerLegId).catch(() => {})
         ]);
 
-        // 2. お客様を会議室へ移動（保留音付き）
+        // 2. お客様を一旦保留用 NCCO へ移動（会議には参加させない）
+        // オペレーターが転送先と相談している間、お客様はこの保留 NCCO で音楽を聴き続ける。
         const customerNcco = [
             {
-                action: 'conversation',
-                name: confName,
-                musicOnHoldUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/hold_music.mp3`]
+                action: 'talk',
+                text: '担当者にお繋ぎします。そのままお待ちください。',
+                language: 'ja-JP'
+            },
+            {
+                action: 'stream',
+                streamUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/hold_music.mp3`],
+                loop: 0
             }
         ];
         await vonage.voice.transferCallWithNCCO(customerLegId, customerNcco);
 
         // 3. オペレーターを会議室へ移動
         const operatorNcco = [
+            {
+                action: 'talk',
+                text: '転送先を呼び出しています。相手先が出るまでこのままお待ちください。',
+                language: 'ja-JP'
+            },
             {
                 action: 'conversation',
                 name: confName
@@ -778,7 +789,7 @@ app.post('/transfer', async (req, res, next) => {
         const inviteNcco = [
             {
                 action: 'talk',
-                text: '通話を転送します。少々お待ちください。',
+                text: '転送電話です。少々お待ちください。',
                 language: 'ja-JP'
             },
             {
