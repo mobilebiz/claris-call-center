@@ -18,6 +18,7 @@
   <script type="text/javascript">
     let phone = '';
     let btnCall;
+    let btnInvite; // 着信ボタン (追加)
     let btnHangup;
     let btnHold; // 保留ボタン
     let btnTransfer; // 転送ボタン
@@ -26,7 +27,7 @@
     let currentLegId; // 自分のLeg ID
     let userId = '';  // オペレーターID
     const client = new vonageClientSDK.VonageClient();
-    const ringtone = new Audio('./ringtone.mp3'); // 着信音のファイルパスを指定
+    const ringtone = new Audio('./ringtone.mp3'); 
 
     // ページのロードが完了したとき
     window.onload = async () => {
@@ -38,38 +39,35 @@
       inputTransfer = document.getElementById('inputTransfer');
       
       try {
-        // クエリーパラメータ（OperatorId）を取得
-        console.log(`🐞 Get query parameters`)
+        console.log(`🐞 Initialization started. userId lookup...`);
         let params = new URLSearchParams(decodeURI(location.search))
         params.forEach((value, key) => {
           if (key === 'userId') {
             userId = value;
           }
           if (key === 'phone') {
-            // valueの先頭１文字が「0」の場合は'+81'に変換
             phone = value.charAt(0) === '0' ? '+81' + value.slice(1) : value;
             btnCall.disabled = false;
             btnCall.innerHTML = '発信';
             btnCall.hidden = false;
           }
         })
+
         if (userId === '') {
-          throw new Error('userId is not set.');
+          throw new Error('URLパラメータ "userId" が設定されていません。');
         }
         console.log(`🐞 userId: ${userId} phone: ${phone}`);
 
         // JWTの取得
         const response = await fetch(`./getToken?name=${userId}`);
+        if (!response.ok) throw new Error(`Token fetch failed: ${response.status}`);
         const data = await response.json();
         const jwt = data.jwt;
   
-        // セッションの作成
-        client.createSession(jwt)
-          .then(sessionId => {
-            console.log("🐞 Session created.");
-          }).catch(error => {
-            throw error;
-          });
+        // セッションの作成 (await するよう変更)
+        console.log("🐞 Creating session...");
+        await client.createSession(jwt);
+        console.log("🐞 Session created successfully.");
 
         // コールステータスのイベントリスナー
         client.on('legStatusUpdate', (callId, legId, status) => {
