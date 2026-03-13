@@ -108,6 +108,11 @@
           }
         });
 
+        // 自分の Leg ID が undefined の場合の予備取得ロジック（デバッグ用）
+        client.on('callInvite', async (callId) => {
+            console.log(`🐞 Incoming call session check:`, client.session);
+        });
+
         // 通話が切断されたときのイベントリスナー
         client.on('callHangup', (callId, callQuality, reason) => {
           console.log('🐞 Call ended');
@@ -252,14 +257,29 @@
                 // しかし、Client SDK の legStatusUpdate で返る callId は Conversation ID である。
                 
                 conversation_uuid: currentCall, 
+            
+            console.log(`🐞 toggleHold: currentCall=${currentCall}, currentLegId=${currentLegId}`);
+            
+            // もし currentLegId が取得できていなければ、セッションから探す試み
+            if (!currentLegId && client.session && client.session.legs) {
+                console.log('🐞 Attempting to find legId from session...', client.session.legs);
+                // セッション内の最初の Leg をとりあえず使ってみる（通常1つのはず）
+                const legs = Object.keys(client.session.legs);
+                if (legs.length > 0) {
+                    currentLegId = legs[0];
+                    console.log(`🐞 Recovered currentLegId from session: ${currentLegId}`);
+                }
+            }
+
+            if (!currentLegId) {
+                console.warn('⚠️ currentLegId is still undefined. Hold might fail.');
+            }
+            
+            const body = {
+                conversation_uuid: currentCall, 
                 leg_id: currentLegId,
                 action: action
             };
-            
-            console.log(`🐞 toggleHold: currentCall=${currentCall}, currentLegId=${currentLegId}`);
-            if (!currentLegId) {
-                console.warn('⚠️ currentLegId is undefined. Wait for legStatusUpdate or check connection.');
-            }
             
             console.log(`🐞 ${action} sending backend...`, body);
 
