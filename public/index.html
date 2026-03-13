@@ -242,22 +242,6 @@
         const action = isHolding ? 'unhold' : 'hold';
 
         try {
-            const body = {
-                conversation_uuid: currentCall, // VonageClientSDKの仕様上、callId = conversation_id の場合が多いが要確認。通常はCall ID。
-                // ただし、serverCall/inviteで返ってくるのは Call ID。
-                // SDKのAPIで conversation ID を取得できるか？
-                // client.getConversationId() 的なものがあればよいが。
-                // ここでは一旦 currentCall を conversation_uuid として送ってみる
-                // ※重要：Mobile SDKなどでは callId != conversationId だが、Client SDK JSではどうだったか。
-                // 実はClient SDKの `legStatusUpdate` の `callId` は Conversation ID であることが多い。
-                // もしくは `client.session.conversations` から引く必要があるかも。
-                // 念の為、Backend側で `conversation_uuid` として受けるが、中身が Call ID の可能性もある。
-                // Backendの `getCustomerLegId` は `conversation_uuid` で検索しているため、
-                // CallID (LegID) が渡ると検索にヒットしない可能性がある。
-                // しかし、Client SDK の legStatusUpdate で返る callId は Conversation ID である。
-                
-                conversation_uuid: currentCall, 
-            
             console.log(`🐞 toggleHold: currentCall=${currentCall}, currentLegId=${currentLegId}`);
             
             // もし currentLegId が取得できていなければ、セッションから探す試み
