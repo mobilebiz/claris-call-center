@@ -1,3 +1,4 @@
 node_modules/
 vcr.yml
 public/tmp/*.mp3
+.agent/

@@ -19,7 +19,11 @@
     let phone = '';
     let btnCall;
     let btnHangup;
+    let btnHold; // 保留ボタン
+    let btnTransfer; // 転送ボタン
+    let inputTransfer; // 転送先入力
     let currentCall;
+    let currentLegId; // 自分のLeg ID
     let userId = '';  // オペレーターID
     const client = new vonageClientSDK.VonageClient();
     const ringtone = new Audio('./ringtone.mp3'); // 着信音のファイルパスを指定
@@ -29,6 +33,9 @@
       btnCall = document.getElementById('btnCall');
       btnInvite = document.getElementById('btnInvite');
       btnHangup = document.getElementById('btnHangup');
+      btnHold = document.getElementById('btnHold');
+      btnTransfer = document.getElementById('btnTransfer');
+      inputTransfer = document.getElementById('inputTransfer');
       
       try {
         // クエリーパラメータ（OperatorId）を取得
@@ -66,7 +73,10 @@
 
         // コールステータスのイベントリスナー
         client.on('legStatusUpdate', (callId, legId, status) => {
-          console.log(`🐞 Leg status update: ${status}`);
+          console.log(`🐞 Leg status update: ${status}, callId: ${callId}, legId: ${legId}`);
+          currentLegId = legId; // Leg IDを保存
+          console.log(`🐞 currentLegId updated to: ${currentLegId}`);
+
           if (status === 'RINGING') { // 呼び出し中
             btnCall.hidden = true;
             btnHangup.innerHTML = '呼び出し中...';
@@ -74,6 +84,10 @@
           }
           if (status === 'ANSWERED') {  // 相手が応答した
             btnHangup.innerHTML = '切断';
+            // 通話確立したので保留・転送UIを表示
+            btnHold.hidden = false;
+            inputTransfer.hidden = false;
+            btnTransfer.hidden = false;
           }
           if (status === 'COMPLETED') { // 通話が終了
             if (phone) {
@@ -83,6 +97,14 @@
             }
             btnHangup.hidden = true;
             btnHangup.innerHTML = '切断';
+            
+            // 通話終了したので保留・転送UIを非表示
+            btnHold.hidden = true;
+            inputTransfer.hidden = true;
+            btnTransfer.hidden = true;
+            btnHold.innerHTML = '保留'; // リセット
+            btnHold.classList.remove('bg-yellow-400');
+            btnHold.classList.add('bg-gray-400');
           }
         });
 
@@ -96,6 +118,14 @@
           }
           btnHangup.hidden = true;
           btnHangup.innerHTML = '切断';
+          
+          // 通話終了したので保留・転送UIを非表示
+          btnHold.hidden = true;
+          inputTransfer.hidden = true;
+          btnTransfer.hidden = true;
+          btnHold.innerHTML = '保留'; // リセット
+          btnHold.classList.remove('bg-yellow-400');
+          btnHold.classList.add('bg-gray-400');
         });
 
         // 着信したときのイベントリスナー
@@ -163,6 +193,10 @@
           btnInvite.innerHTML = '着信中...';
           btnHangup.hidden = false;
           btnHangup.disabled = false;
+          // 応答したので保留・転送UIを表示
+          btnHold.hidden = false;
+          inputTransfer.hidden = false;
+          btnTransfer.hidden = false;
         }).catch((error) => {
           throw error;
         });
@@ -196,13 +230,119 @@
         console.error(`🐞 Error: ${error.message}`)        
       }
     }
+
+    // 保留機能
+    async function toggleHold() {
+        const isHolding = btnHold.innerHTML === '再開';
+        const action = isHolding ? 'unhold' : 'hold';
+
+        try {
+            const body = {
+                conversation_uuid: currentCall, // VonageClientSDKの仕様上、callId = conversation_id の場合が多いが要確認。通常はCall ID。
+                // ただし、serverCall/inviteで返ってくるのは Call ID。
+                // SDKのAPIで conversation ID を取得できるか？
+                // client.getConversationId() 的なものがあればよいが。
+                // ここでは一旦 currentCall を conversation_uuid として送ってみる
+                // ※重要：Mobile SDKなどでは callId != conversationId だが、Client SDK JSではどうだったか。
+                // 実はClient SDKの `legStatusUpdate` の `callId` は Conversation ID であることが多い。
+                // もしくは `client.session.conversations` から引く必要があるかも。
+                // 念の為、Backend側で `conversation_uuid` として受けるが、中身が Call ID の可能性もある。
+                // Backendの `getCustomerLegId` は `conversation_uuid` で検索しているため、
+                // CallID (LegID) が渡ると検索にヒットしない可能性がある。
+                // しかし、Client SDK の legStatusUpdate で返る callId は Conversation ID である。
+                
+                conversation_uuid: currentCall, 
+                leg_id: currentLegId,
+                action: action
+            };
+            
+            console.log(`🐞 toggleHold: currentCall=${currentCall}, currentLegId=${currentLegId}`);
+            if (!currentLegId) {
+                console.warn('⚠️ currentLegId is undefined. Wait for legStatusUpdate or check connection.');
+            }
+            
+            console.log(`🐞 ${action} sending backend...`, body);
+
+            const response = await fetch('./hold', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(body)
+            });
+
+            if (response.ok) {
+                if (isHolding) {
+                    btnHold.innerHTML = '保留';
+                    btnHold.classList.remove('bg-yellow-400');
+                    btnHold.classList.add('bg-gray-400');
+                } else {
+                    btnHold.innerHTML = '再開';
+                    btnHold.classList.remove('bg-gray-400');
+                    btnHold.classList.add('bg-yellow-400');
+                }
+            } else {
+                console.error('Failed to hold/unhold');
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    // 転送機能
+    async function transferCall() {
+        const destination = inputTransfer.value;
+        if (!destination) {
+            alert('転送先番号を入力してください');
+            return;
+        }
+        if (!confirm(`${destination} へ転送しますか？`)) {
+            return;
+        }
+
+        try {
+            const body = {
+                conversation_uuid: currentCall,
+                leg_id: currentLegId,
+                destination_number: destination
+            };
+
+            const response = await fetch('./transfer', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(body)
+            });
+
+            if (response.ok) {
+                console.log('Transfer initiated');
+                // 転送後は切断扱いになるか、自分で切るか。
+                // Backendで切断していなければ、ここで切断する。
+                // クライアント側で明示的に切断しても良い。
+                // 今回はサーバー側でやってないので、ここでハングアップを呼ぶのが無難だが、
+                // 転送成功ならそのまま通話終了フローに乗るはず。
+            } else {
+                console.error('Failed to transfer');
+                alert('転送に失敗しました');
+            }
+        } catch (e) {
+            console.error(e);
+            alert('転送エラー');
+        }
+    }
   </script>
 </head>
 <body class="center">
-  <div class="m-0">
-  	<button id="btnCall" class="text-white font-bold bg-blue-400 p-2 rounded" hidden onclick="phoneCall()">発信</button>
-  	<button id="btnInvite" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="invite()">着信中...</button>
-  	<button id="btnHangup" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="hangup()">切断</button>
+  <div class="m-0 flex flex-col items-center gap-2">
+    <div class="flex gap-2">
+  	    <button id="btnCall" class="text-white font-bold bg-blue-400 p-2 rounded" hidden onclick="phoneCall()">発信</button>
+  	    <button id="btnInvite" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="invite()">着信中...</button>
+  	    <button id="btnHangup" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="hangup()">切断</button>
+        <button id="btnHold" class="text-white font-bold bg-gray-400 p-2 rounded" hidden onclick="toggleHold()">保留</button>
+        <input id="inputTransfer" type="text" class="border p-2 rounded" placeholder="転送先番号" hidden />
+        <button id="btnTransfer" class="text-white font-bold bg-green-400 p-2 rounded" hidden onclick="transferCall()">転送</button>
+    </div>
   </div>
 </body>
 </html>

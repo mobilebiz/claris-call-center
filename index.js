@@ -499,6 +499,140 @@ function generateJWT(username) {
 }
 
 /**
+ * 顧客のLeg IDを取得する
+ * @param {string} conversation_uuid 
+ * @param {string} operator_leg_id 
+ * @returns {Promise<string>}
+ */
+async function getCustomerLegId(conversation_uuid, operator_leg_id) {
+    try {
+        console.log(`🐞 getCustomerLegId called. conversation_uuid: ${conversation_uuid}, operator_leg_id: ${operator_leg_id}`);
+        // 会話に参加しているメンバー（Leg）を取得
+        // getCalls は会話IDでのフィルタリングができないため、個別にLeg情報を管理していない場合は、
+        // conversation_members などを参照する必要があるが、VCR SDKでどう行うか確認が必要。
+        // ここでは、voice.listCalls() でフィルタリングできるか試みるが、SDKの仕様上厳しい場合がある。
+        // そのため、簡易的に全コールから該当conversation_uuidを探すか、またはConversations APIを使うのが正しい。
+        // ですが、今回は @vonage/server-sdk の voice オブジェクトを使っています。
+        
+        // server-sdk の voice.get_calls は全件取得になりがちなので注意が必要ですが、
+        // filter object を渡せます。
+        
+        // NOTE: 実は client-sdk から serverCall したときや、PSTN着信時は leg_id が特定しやすいですが、
+        // 相手側(customer)を特定するのは少しロジックがいります。
+        // ここでは、"operator_leg_id ではない" かつ "status が started/ringing" であるものを探します。
+
+        // フィルタリング: conversationUuid が一致するもの
+        const filter = {
+           conversationUuid: conversation_uuid
+        };
+        // @vonage/server-sdk v3.x の voice.searchFiles ではなく searchCalls のようなメソッドを探す。
+        // SDKのメソッド名を確認: vonage.voice.searchCalls(filter)
+        
+        const page = await vonage.voice.search(filter);
+        if (page && page._embedded && page._embedded.calls) {
+            console.log(`🐞 calls found: ${page._embedded.calls.length}`);
+            for (const call of page._embedded.calls) {
+                if (call.uuid !== operator_leg_id) {
+                    console.log(`🐞 Customer leg found: ${call.uuid}`);
+                    return call.uuid;
+                }
+            }
+        } else {
+            console.log(`🐞 No calls found for conversation: ${conversation_uuid}`);
+        }
+        return null;
+    } catch (e) {
+        console.error(e);
+        return null;
+    }
+}
+
+/**
+ * 保留機能のエンドポイント
+ */
+app.post('/hold', async (req, res, next) => {
+    console.log('🐞 /hold called', req.body);
+    try {
+        const { conversation_uuid, leg_id, action } = req.body;
+        // 顧客のLeg IDを特定
+        // クライアント側で自分のLeg IDがわかっていればそれを送ってもらう (leg_id)
+        const customerLegId = await getCustomerLegId(conversation_uuid, leg_id);
+
+        if (!customerLegId) {
+            console.error(`🐞 Customer Not Found. conversation_uuid: ${conversation_uuid}, operator_leg_id: ${leg_id}`);
+            res.status(404).send(`Customer Not Found for conversation ${conversation_uuid}`);
+            return;
+        }
+
+        if (action === 'hold') {
+            console.log(`🐞 Holding call: ${customerLegId}`);
+            // 顧客側に保留音を再生
+            // streamUrl は public フォルダの ringtone.mp3 を使う
+            // VCR_INSTANCE_PUBLIC_URL が設定されている前提
+            const streamUrl = `${process.env.VCR_INSTANCE_PUBLIC_URL}/ringtone.mp3`;
+            await vonage.voice.streamAudio(customerLegId, streamUrl, 0); // 0 = loop infinitely
+        } else if (action === 'unhold') {
+            console.log(`🐞 Unholding call: ${customerLegId}`);
+            // 音声再生を停止
+            await vonage.voice.stopStreamAudio(customerLegId);
+        }
+
+        res.sendStatus(200);
+
+    } catch (e) {
+        next(e);
+    }
+});
+
+/**
+ * 転送機能のエンドポイント
+ */
+app.post('/transfer', async (req, res, next) => {
+    console.log('🐞 /transfer called', req.body);
+    try {
+        const { conversation_uuid, leg_id, destination_number } = req.body;
+        const customerLegId = await getCustomerLegId(conversation_uuid, leg_id);
+
+        if (!customerLegId) {
+             console.error('Customer Not Found');
+             res.status(404).send('Customer Not Found');
+             return;
+        }
+        
+        console.log(`🐞 Transferring call: ${customerLegId} to ${destination_number}`);
+        
+        // 転送先のNCCOを作成
+        const ncco = [
+            {
+                action: 'connect',
+                from: process.env.VONAGE_NUMBER, // 発信元番号
+                endpoint: [
+                    {
+                        type: 'phone',
+                        number: destination_number.replace(/^0/, '81') // E.164形式へ簡易変換
+                    }
+                ]
+            }
+        ];
+
+        // 転送実行
+        await vonage.voice.transferCallWithNcco(customerLegId, ncco);
+        
+        // オペレーター側の通話を切断する必要があるかどうか？
+        // transferCallWithNcco は指定したLeg (customer) を新しいNCCOに移動させる。
+        // 元のConversationから引き剥がされるため、オペレーターは一人取り残される形になるはず。
+        // クライアント側で hangup してもらうのが自然だが、サーバー側で切断も可能。
+        // ここではサーバー側でオペレーターも切断する場合は以下を追加：
+        // await vonage.voice.hangupCall(leg_id);
+        
+        res.sendStatus(200);
+
+    } catch (e) {
+        next(e);
+    }
+});
+
+/**
  * WebSocketテスト用エンドポイント
  * @param {WebSocket} ws - WebSocketオブジェクト
  * @param {Object} req - リクエストオブジェクト
