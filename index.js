@@ -668,16 +668,32 @@ app.post('/transfer', async (req, res, next) => {
         // 転送先のNCCOを作成
         const ncco = [
             {
+                action: 'talk',
+                text: '担当者にお繋ぎします。しばらくお待ちください。',
+                language: 'ja-JP',
+                style: 0
+            },
+            {
                 action: 'connect',
-                from: process.env.VONAGE_NUMBER, // 発信元番号
+                from: process.env.VONAGE_NUMBER,
+                eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?userId=${operator_user_id}`],
                 endpoint: [
                     {
                         type: 'phone',
-                        number: destination_number.replace(/^0/, '81') // E.164形式へ簡易変換
+                        number: destination_number.startsWith('0') 
+                            ? destination_number.replace(/^0/, '81') 
+                            : destination_number
                     }
                 ]
             }
         ];
+
+        // 宛先番号に '+' が必要な場合に備えた補正
+        if (ncco[1].endpoint[0].number.startsWith('81')) {
+            ncco[1].endpoint[0].number = '+' + ncco[1].endpoint[0].number;
+        }
+
+        console.log(`🐞 Sending Transfer NCCO:`, JSON.stringify(ncco, null, 2));
 
         // 転送実行
         await vonage.voice.transferCallWithNCCO(customerLegId, ncco);
