@@ -308,14 +308,21 @@ app.post('/onEvent', async (req, res, next) => {
         if (targetConfId && targetConfId.startsWith('CONF-')) {
             targetConfId = targetConfId.replace('CONF-', '');
         }
+
+        console.log(`🐞 [Debug] targetConfId (normalized): ${targetConfId}, status: ${status}, uuid: ${uuid}`);
+
         const session = consultationSessions[targetConfId];
 
         if (session && status === 'completed') {
-            console.log(`🐞 Consultation event: status=${status}, uuid=${uuid}, session.customerLegId=${session.customerLegId}`);
+            console.log(`🐞 Consultation event matched! session:`, {
+                customer: session.customerLegId,
+                operator: session.operatorLegId,
+                transfer: session.transferLegId
+            });
             
             if (uuid === session.customerLegId) {
                 // 1. お客様が切断した場合 -> 全員切断
-                console.log(`🐞 Customer disconnected during consultation. Hanging up everyone.`);
+                console.log(`🐞 Customer disconnected. Hanging up consultant leg ${session.transferLegId}`);
                 const hangups = [];
                 if (session.operatorLegId) hangups.push(vonage.voice.hangupCall(session.operatorLegId).catch(() => {}));
                 if (session.transferLegId) hangups.push(vonage.voice.hangupCall(session.transferLegId).catch(() => {}));
@@ -325,38 +332,36 @@ app.post('/onEvent', async (req, res, next) => {
             else if (uuid === session.operatorLegId || uuid === session.transferLegId) {
                 // 2. オペレーターまたは転送先が切断した場合 -> 残った方をお客様と繋ぐ
                 const remainingLegId = (uuid === session.operatorLegId) ? session.transferLegId : session.operatorLegId;
-                console.log(`🐞 Consultant/Operator disconnected. UUID: ${uuid}, Remaining: ${remainingLegId}`);
+                console.log(`🐞 Member disconnected. Connecting customer ${session.customerLegId} -> remaining ${remainingLegId}`);
                 
                 if (session.customerLegId && remainingLegId) {
-                    console.log(`🐞 Reconnecting customer ${session.customerLegId} to remaining leg ${remainingLegId}`);
-                    // お客様の保留を解除（NCCOを更新。正規化後の targetConfId を使用）
                     const resumeNcco = [{ 
                         action: 'conversation', 
                         name: `CONF-${targetConfId}`,
                         startConferenceOnEnter: true
                     }];
                     try {
+                        console.log(`🐞 Executing transferCallWithNCCO to reconnect customer...`);
                         await vonage.voice.transferCallWithNCCO(session.customerLegId, resumeNcco);
-                        console.log(`🐞 Customer leg ${session.customerLegId} resumed into conference CONF-${targetConfId}`);
+                        console.log(`✅ Customer leg ${session.customerLegId} resumed.`);
                     } catch (err) {
-                        console.error(`🐞 Failed to resume customer leg:`, err.message);
+                        console.error(`❌ Failed to resume customer leg:`, err.message);
                     }
                 }
-                // 重要: どちらかが切れても相談セッションとしては終了
                 delete consultationSessions[targetConfId];
             }
         }
 
         // 応答時の処理（isTransferLeg でない場合のみ = オペレーターの主レグのみ）
         if (status === 'answered' && direction === 'outbound' && userId && !isTransferLeg) {
-            // オペレーターのステータス変更
-            await updateOperatorStatus(conversation_uuid, req.body.from || '', '通話中', userId);
+            console.log(`🐞 updateOperatorStatus to In-Call for ${userId}`);
+            await updateOperatorStatus(targetConfId, req.body.from || '', '通話中', userId);
         }
-        // 通話終了時の処理（isTransferLeg でない場合のみ = オペレーターの主レグのみ）
+        // 通話終了時の処理（isTransferLeg でない場合のみ）
         if (status === 'completed' && userId && !isTransferLeg) {
-            // オペレーターのステータス変更（方向を問わず切断時は待受に戻す）
             console.log(`🐞 updateOperatorStatus to Available for ${userId}`);
-            await updateOperatorStatus(conversation_uuid, '', '待受中', userId);
+            // CRM に渡す ID も正規化済みの targetConfId を使用
+            await updateOperatorStatus(targetConfId, '', '待受中', userId);
         }
         res.sendStatus(200);
     } catch (e) {
