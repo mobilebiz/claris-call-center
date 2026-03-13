@@ -247,33 +247,32 @@
         const action = isHolding ? 'unhold' : 'hold';
 
         try {
-            console.log(`🐞 toggleHold: currentCall=${currentCall}, currentLegId=${currentLegId}`);
+            console.log(`🐞 toggleHold: currentCall=${currentCall}, currentLegId=${currentLegId}, userId=${userId}`);
             
-            // 重要：送信直前に最新のセッション情報から自分の Leg ID を再取得・確定させる
+            // 重要：送信直前に最新のセッション情報から自分の Leg ID を再取得・確定させる試みは継続
             if (client.session && client.session.legs) {
                 const legs = Object.keys(client.session.legs);
                 if (legs.length > 0) {
-                    // もし現在の ID がセッションに含まれていない、または空なら、セッションから拾う
                     if (!currentLegId || !client.session.legs[currentLegId]) {
                         currentLegId = legs[0];
-                        console.log(`🐞 currentLegId forced from session: ${currentLegId}`);
+                        console.log(`🐞 currentLegId recovered/forced from session: ${currentLegId}`);
                     }
                 }
             }
 
+            // ID が特定できなくてもアラートは出さず、サーバー側での User ID ベース判別に委ねる
             if (!currentLegId) {
-                console.error('❌ Error: currentLegId is still undefined. Session:', client.session);
-                alert('エラー：自身の通話IDが特定できません。ページをリロードして再度お試しください。');
-                return;
+                console.warn('⚠️ currentLegId is undefined. Relying on Server-side User ID lookup.');
             }
             
             const body = {
                 conversation_uuid: currentCall, 
-                leg_id: currentLegId,
+                leg_id: currentLegId, // 補助情報として送るが、サーバー側で無視・補完可能
+                operator_user_id: userId, // 自分の ID を送る
                 action: action
             };
             
-            console.log(`🐞 ${action} sending backend...`, body);
+            console.log(`🐞 ${action} sending backend (User-based)...`, body);
 
             const response = await fetch('./hold', {
                 method: 'POST',
@@ -294,10 +293,13 @@
                     btnHold.classList.add('bg-yellow-400');
                 }
             } else {
-                console.error('Failed to hold/unhold');
+                const errText = await response.text();
+                console.error('Failed to hold/unhold:', errText);
+                alert('保留操作に失敗しました: ' + errText);
             }
         } catch (e) {
             console.error(e);
+            alert('通信エラーが発生しました');
         }
     }
 

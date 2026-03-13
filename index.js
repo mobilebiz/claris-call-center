@@ -499,89 +499,65 @@ function generateJWT(username) {
 }
 
 /**
- * 顧客のLeg IDを取得する
- * @param {string} conversation_uuid 
- * @param {string} operator_leg_id 
- * @returns {Promise<string>}
+ * 会話内の Leg 一覧を特定し、オペレーターと顧客を判別して返す
+ * @param {string} conversation_uuid 会話 UUID または Leg ID
+ * @param {string} operator_leg_id_hint オペレーターの Leg ID (補助情報)
+ * @param {string} operator_user_id オペレーターのユーザー名/ID
+ * @returns {Promise<{operatorLegId: string, customerLegId: string}>}
  */
-async function getCustomerLegId(conversation_uuid, operator_leg_id) {
+async function getCallLegs(conversation_uuid, operator_leg_id_hint, operator_user_id) {
     try {
-        console.log(`🐞 getCustomerLegId called. conversation_uuid: ${conversation_uuid}, operator_leg_id: ${operator_leg_id}`);
-        // 会話に参加しているメンバー（Leg）を取得
-        // getCalls は会話IDでのフィルタリングができないため、個別にLeg情報を管理していない場合は、
-        // conversation_members などを参照する必要があるが、VCR SDKでどう行うか確認が必要。
-        // ここでは、voice.listCalls() でフィルタリングできるか試みるが、SDKの仕様上厳しい場合がある。
-        // そのため、簡易的に全コールから該当conversation_uuidを探すか、またはConversations APIを使うのが正しい。
-        // ですが、今回は @vonage/server-sdk の voice オブジェクトを使っています。
+        console.log(`🐞 getCallLegs called. conv: ${conversation_uuid}, operator_user: ${operator_user_id}`);
         
-        // server-sdk の voice.get_calls は全件取得になりがちなので注意が必要ですが、
-        // filter object を渡せます。
-        
-        // NOTE: 実は client-sdk から serverCall したときや、PSTN着信時は leg_id が特定しやすいですが、
-        // 相手側(customer)を特定するのは少しロジックがいります。
-        // ここでは、"operator_leg_id ではない" かつ "status が started/ringing" であるものを探します。
-
-        // 1. フィルターを使用して検索
-        const filter = {
-           conversationUuid: conversation_uuid
-        };
-        const page = await vonage.voice.search(filter);
-        
+        let targetConvId = conversation_uuid;
         let calls = [];
+
+        // 1. まず入力された ID が直接の Leg ID かどうか確認し、そうなら所属する Conversation ID を特定する
+        try {
+            const directCall = await vonage.voice.getCall(conversation_uuid);
+            if (directCall) {
+                console.log(`🐞 ${conversation_uuid} is a Leg ID in conversation ${directCall.conversationUuid}`);
+                targetConvId = directCall.conversationUuid;
+            }
+        } catch (e) {}
+
+        // 2. Conversation 内の全 Leg を検索
+        const page = await vonage.voice.search({ conversationUuid: targetConvId });
         if (page && page._embedded && page._embedded.calls) {
             calls = page._embedded.calls;
         }
 
-        // 2. 検索で見つからない場合のフォールバック: 全通話から手動フィルタリング
-        if (calls.length === 0) {
-            console.log(`🐞 Search by filter found 0. Trying manual filtering from all active calls...`);
-            const allCallsPage = await vonage.voice.search({ status: 'started' });
-            if (allCallsPage && allCallsPage._embedded && allCallsPage._embedded.calls) {
-                calls = allCallsPage._embedded.calls.filter(c => c.conversationUuid === conversation_uuid || c.uuid === conversation_uuid);
-            }
-        }
-
-        // 3. 検索で見つからない場合のフォールバック: ID自体がLeg IDである可能性をチェック
-        if (calls.length === 0) {
-            console.log(`🐞 Search found 0. Checking if ${conversation_uuid} is a direct Leg ID...`);
-            try {
-                const directCall = await vonage.voice.getCall(conversation_uuid);
-                if (directCall) {
-                    console.log(`🐞 ${conversation_uuid} is a Leg ID in conversation ${directCall.conversationUuid}`);
-                    // 入力された conversation_uuid 自体が Leg ID だった場合、
-                    // その会話に関連する「すべての Leg」を検索して、オペレーターではない方を探す
-                    const convPage = await vonage.voice.search({ conversationUuid: directCall.conversationUuid });
-                    if (convPage && convPage._embedded && convPage._embedded.calls) {
-                        calls = convPage._embedded.calls;
-                    }
-                }
-            } catch (err) {
-                console.log(`🐞 ${conversation_uuid} is not a valid Leg ID or Conversation UUID.`);
-            }
-        }
-
-        console.log(`🐞 Candidates for search: ${calls.length}`);
-        // もしオペレーターIDが不明な場合、自分（conversation_uuid が LegID の場合）を除外する試み
-        const excludeId = operator_leg_id || (calls.some(c => c.uuid === conversation_uuid) ? conversation_uuid : null);
-        console.log(`🐞 Excluding ID: ${excludeId}`);
-
-        for (const call of calls) {
-            if (call.uuid !== excludeId && call.status === 'started') {
-                console.log(`🐞 Customer leg candidate found: ${call.uuid}`);
-                return call.uuid;
-            }
-        }
+        console.log(`🐞 Found ${calls.length} legs in conversation ${targetConvId}`);
         
-        // 最後の手段：もし2つしかなくて、片方が分かっているなら、消去法でもう片方を返す
-        if (calls.length === 2) {
-             const other = calls.find(c => c.uuid !== excludeId);
-             if (other) return other.uuid;
+        let operatorLegId = operator_leg_id_hint;
+        let customerLegId = null;
+
+        // 3. User ID またはヒントを用いてオペレーターの Leg を確定させる
+        for (const call of calls) {
+            // to または from にオペレーターの User ID が含まれているか（App Leg の場合）
+            const isOperator = (call.to && call.to.includes(operator_user_id)) || 
+                             (call.from && call.from.includes(operator_user_id)) ||
+                             (call.uuid === operator_leg_id_hint);
+            
+            if (isOperator) {
+                operatorLegId = call.uuid;
+                console.log(`🐞 Identified Operator Leg: ${operatorLegId}`);
+            }
         }
 
-        return null;
+        // 4. 残った方を顧客として特定
+        for (const call of calls) {
+            if (call.uuid !== operatorLegId && call.status === 'started') {
+                customerLegId = call.uuid;
+                console.log(`🐞 Identified Customer Leg: ${customerLegId}`);
+                break;
+            }
+        }
+
+        return { operatorLegId, customerLegId };
     } catch (e) {
-        console.error(e);
-        return null;
+        console.error(`🐞 Error in getCallLegs:`, e);
+        return { operatorLegId: operator_leg_id_hint, customerLegId: null };
     }
 }
 
@@ -591,19 +567,21 @@ async function getCustomerLegId(conversation_uuid, operator_leg_id) {
 app.post('/hold', async (req, res, next) => {
     console.log('🐞 /hold called', req.body);
     try {
-        const { conversation_uuid, leg_id, action } = req.body;
-        // 顧客のLeg IDを特定
-        // クライアント側で自分のLeg IDがわかっていればそれを送ってもらう (leg_id)
-        const customerLegId = await getCustomerLegId(conversation_uuid, leg_id);
+        const { conversation_uuid, leg_id, action, operator_user_id } = req.body;
+        // 会話内の全 Leg を取得し、オペレーターと顧客を特定
+        const { operatorLegId, customerLegId } = await getCallLegs(conversation_uuid, leg_id, operator_user_id);
 
         if (!customerLegId) {
-            console.error(`🐞 Customer Not Found. conversation_uuid: ${conversation_uuid}, operator_leg_id: ${leg_id}`);
+            console.error(`🐞 Customer Not Found. conv: ${conversation_uuid}, operator_user: ${operator_user_id}, hint: ${leg_id}`);
             res.status(404).send(`Customer Not Found for conversation ${conversation_uuid}`);
             return;
         }
 
+        // オペレーター ID を特定したもので更新
+        const finalOperatorId = operatorLegId || leg_id;
+
         if (action === 'hold') {
-            console.log(`🐞 Holding calls: operator=${leg_id}, customer=${customerLegId}`);
+            console.log(`🐞 Holding calls: operator=${finalOperatorId}, customer=${customerLegId}`);
             
             const streamUrl = `${process.env.VCR_INSTANCE_PUBLIC_URL}/hold_music.mp3`;
             console.log(`🐞 Streaming audio to: ${streamUrl}`);
@@ -650,8 +628,9 @@ app.post('/hold', async (req, res, next) => {
 app.post('/transfer', async (req, res, next) => {
     console.log('🐞 /transfer called', req.body);
     try {
-        const { conversation_uuid, leg_id, destination_number } = req.body;
-        const customerLegId = await getCustomerLegId(conversation_uuid, leg_id);
+        const { conversation_uuid, leg_id, destination_number, operator_user_id } = req.body;
+        // 会話内の全 Leg を取得し、オペレーターと顧客を特定
+        const { customerLegId } = await getCallLegs(conversation_uuid, leg_id, operator_user_id);
 
         if (!customerLegId) {
              console.error('Customer Not Found');
