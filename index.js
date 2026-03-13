@@ -30,6 +30,7 @@ app.use(express.static('public'));
 // Value: { customerLegId, operatorLegId, transferLegId, isConsulting: bool }
 const consultationSessions = {};
 
+// --- Vonage 連携初期化 ---
 const session = vcr.createSession();
 const voice = new Voice(session);
 
@@ -39,18 +40,10 @@ await voice.onCall('onCall');
 await voice.onCallEvent({ callback: 'onEvent' });
 
 /**
- * ヘルスチェック用エンドポイント
+ * サービス状態確認 (ヘルスチェック)
  */
-app.get('/_/health', async (req, res) => {
-    res.sendStatus(200);
-});
-
-/**
- * メトリクス取得用エンドポイント
- */
-app.get('/_/metrics', async (req, res) => {
-    res.sendStatus(200);
-});
+app.get('/_/health', (req, res) => res.sendStatus(200));
+app.get('/_/metrics', (req, res) => res.sendStatus(200));
 
 /**
  * 電話番号からフリガナ情報を取得するAPI
@@ -310,36 +303,51 @@ app.post('/onEvent', async (req, res, next) => {
         const activeUserId = userId || (session ? session.operatorUserId : null);
 
         if (session && status === 'completed') {
-            console.log(`🐞 Consultation event MATCHED: uuid=${uuid}, session:`, session);
+            console.log(`🐞 Consultation session event: uuid=${uuid}, session:`, session);
             
-            if (uuid === session.customerLegId) {
-                // 1. お客様が切断した場合 -> 全員切断
-                console.log(`🐞 Customer disconnected. Terminating remaining legs...`);
-                const hangups = [];
-                if (session.operatorLegId) hangups.push(vonage.voice.hangupCall(session.operatorLegId).catch(() => {}));
-                if (session.transferLegId) hangups.push(vonage.voice.hangupCall(session.transferLegId).catch(() => {}));
-                await Promise.allSettled(hangups);
-                delete consultationSessions[targetConfId];
-            } 
-            else if (uuid === session.operatorLegId || uuid === session.transferLegId) {
-                // 2. オペレーターまたは転送先が切断した場合 -> 残った方をお客様と繋ぐ
-                const remainingLegId = (uuid === session.operatorLegId) ? session.transferLegId : session.operatorLegId;
-                console.log(`🐞 Member disconnected. UUID: ${uuid}, Reconnecting customer ${session.customerLegId} to ${remainingLegId}`);
-                
-                if (session.customerLegId && remainingLegId) {
+            // 役割ごとのレグIDをクリア
+            if (uuid === session.customerLegId) session.customerLegId = null;
+            if (uuid === session.operatorLegId) session.operatorLegId = null;
+            if (uuid === session.transferLegId) session.transferLegId = null;
+
+            // 残っているレグをリストアップ
+            const remainingLegs = [session.customerLegId, session.operatorLegId, session.transferLegId].filter(id => !!id);
+            console.log(`🐞 Remaining legs in session count: ${remainingLegs.length}`, remainingLegs);
+
+            if (remainingLegs.length === 2) {
+                // 3人から2人になった場合（例：相談開始後にどちらかが切れた、または3人会議からの離脱）
+                // お客様が残っている場合のみ、お客様の保留解除（橋渡し）を行う
+                if (session.customerLegId) {
+                    const remainingMemberLegId = remainingLegs.find(id => id !== session.customerLegId);
+                    console.log(`🐞 STAFF disconnected. Bridging customer ${session.customerLegId} to ${remainingMemberLegId}`);
+                    
                     const resumeNcco = [{ 
                         action: 'conversation', 
                         name: `CONF-${targetConfId}`,
                         startConferenceOnEnter: true
                     }];
                     try {
-                        console.log(`🐞 Reconnecting customer via transferCallWithNCCO...`);
                         await vonage.voice.transferCallWithNCCO(session.customerLegId, resumeNcco);
-                        console.log(`✅ Customer reconnection initiated.`);
+                        console.log(`✅ Customer bridging initiated.`);
                     } catch (err) {
-                        console.error(`❌ Failed to reconnect customer:`, err.message);
+                        console.error(`❌ Failed to bridge customer:`, err.message);
+                        // 転送失敗時はクリーンアップ
+                        delete consultationSessions[targetConfId];
                     }
                 }
+            } else if (remainingLegs.length === 1) {
+                // 残り1人になった場合 -> 全員終了（連鎖切断）
+                const lastLegId = remainingLegs[0];
+                console.log(`🐞 Only 1 leg remains (${lastLegId}). Terminating session...`);
+                try {
+                    await vonage.voice.hangupCall(lastLegId);
+                } catch (err) {
+                    console.error(`❌ Failed to hangup last leg:`, err.message);
+                }
+                delete consultationSessions[targetConfId];
+            } else {
+                // 全員終了
+                console.log(`🐞 No legs remain. Cleaning up session.`);
                 delete consultationSessions[targetConfId];
             }
         }
@@ -849,6 +857,53 @@ router.ws('/test', (ws, req) => {
         console.log(`🐞 ws received: ${msg}`);
         ws.send(msg);
     });
+});
+
+/**
+ * 転送キャンセル（転送先のみ切断し、お客様と復帰）
+ */
+app.post('/cancelTransfer', async (req, res, next) => {
+    const { conversation_uuid, operator_user_id } = req.body;
+    console.log(`🐞 /cancelTransfer called: conv=${conversation_uuid}, operator=${operator_user_id}`);
+
+    try {
+        const sessionEntry = Object.entries(consultationSessions).find(([_, s]) => 
+            s.operatorUserId === operator_user_id && (s.customerLegId || s.transferLegId)
+        );
+
+        if (!sessionEntry) {
+            return res.status(404).send('Active consultation session not found');
+        }
+
+        const [confId, session] = sessionEntry;
+
+        // 1. 転送先のみを切断
+        if (session.transferLegId) {
+            console.log(`🐞 Hanging up transfer leg: ${session.transferLegId}`);
+            try {
+                await vonage.voice.hangupCall(session.transferLegId);
+            } catch (err) {
+                console.warn(`⚠️ Failed to hangup transfer leg: ${err.message}`);
+            }
+            session.transferLegId = null;
+        }
+
+        // 2. お客様を通常の会議（保留音なし）に引き戻す
+        if (session.customerLegId) {
+            console.log(`🐞 Reconnecting customer ${session.customerLegId} to operator`);
+            const resumeNcco = [{ 
+                action: 'conversation', 
+                name: `CONF-${confId}`,
+                startConferenceOnEnter: true
+            }];
+            await vonage.voice.transferCallWithNCCO(session.customerLegId, resumeNcco);
+        }
+
+        res.status(200).send('Transfer canceled and customer reconnected');
+    } catch (e) {
+        console.error('🐞 /cancelTransfer Error:', e.message);
+        res.status(500).send(e.message);
+    }
 });
 
 app.listen(port, () => {
