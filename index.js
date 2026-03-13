@@ -268,10 +268,6 @@ app.post('/onCall', async (req, res, next) => {
                     split: 'conversation',
                     transcription: {
                         language: 'ja-JP',
-                        eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEventTranscribed`],
-                        // sentimentAnalysis: true
-                    },
-                },
                 {
                     action: 'connect',
                     eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?userId=${userId}`],
@@ -290,9 +286,6 @@ app.post('/onCall', async (req, res, next) => {
 
 /**
  * イベント発生時のイベントハンドラー
- * @param {Object} req - リクエストオブジェクト
- * @param {Object} res - レスポンスオブジェクト
- * @param {Function} next - 次のミドルウェア関数
  */
 app.post('/onEvent', async (req, res, next) => {
     console.log(`🐞 onEvent called: status=${req.body.status}, uuid=${req.body.uuid}, conv=${req.body.conversation_uuid}`);
@@ -303,26 +296,22 @@ app.post('/onEvent', async (req, res, next) => {
         console.log('🐞 meta:', { userId, isTransferLeg, confName });
 
         // 相談転送（Warm Transfer）の処理
-        // セッションの特定（URLパラメータの confName か、現在の conversation_uuid）
-        let targetConfId = confName || conversation_uuid;
-        if (targetConfId && targetConfId.startsWith('CONF-')) {
-            targetConfId = targetConfId.replace('CONF-', '');
-        }
+        // 会話IDは変動するため、自身のレグIDが参加者のいずれかと一致するかでセッションを特定する
+        const sessionEntry = Object.entries(consultationSessions).find(([_, s]) => 
+            s.customerLegId === uuid || s.operatorLegId === uuid || s.transferLegId === uuid
+        );
+        const targetConfId = sessionEntry ? sessionEntry[0] : null;
+        const session = sessionEntry ? sessionEntry[1] : null;
 
-        console.log(`🐞 [Debug] targetConfId (normalized): ${targetConfId}, status: ${status}, uuid: ${uuid}`);
-
-        const session = consultationSessions[targetConfId];
+        // Fallback: userId がクエリにない場合、セッションから復元
+        const activeUserId = userId || (session ? session.operatorUserId : null);
 
         if (session && status === 'completed') {
-            console.log(`🐞 Consultation event matched! session:`, {
-                customer: session.customerLegId,
-                operator: session.operatorLegId,
-                transfer: session.transferLegId
-            });
+            console.log(`🐞 Consultation event MATCHED: uuid=${uuid}, session:`, session);
             
             if (uuid === session.customerLegId) {
                 // 1. お客様が切断した場合 -> 全員切断
-                console.log(`🐞 Customer disconnected. Hanging up consultant leg ${session.transferLegId}`);
+                console.log(`🐞 Customer disconnected. Terminating remaining legs...`);
                 const hangups = [];
                 if (session.operatorLegId) hangups.push(vonage.voice.hangupCall(session.operatorLegId).catch(() => {}));
                 if (session.transferLegId) hangups.push(vonage.voice.hangupCall(session.transferLegId).catch(() => {}));
@@ -332,7 +321,7 @@ app.post('/onEvent', async (req, res, next) => {
             else if (uuid === session.operatorLegId || uuid === session.transferLegId) {
                 // 2. オペレーターまたは転送先が切断した場合 -> 残った方をお客様と繋ぐ
                 const remainingLegId = (uuid === session.operatorLegId) ? session.transferLegId : session.operatorLegId;
-                console.log(`🐞 Member disconnected. Connecting customer ${session.customerLegId} -> remaining ${remainingLegId}`);
+                console.log(`🐞 Member disconnected. UUID: ${uuid}, Reconnecting customer ${session.customerLegId} to ${remainingLegId}`);
                 
                 if (session.customerLegId && remainingLegId) {
                     const resumeNcco = [{ 
@@ -341,30 +330,33 @@ app.post('/onEvent', async (req, res, next) => {
                         startConferenceOnEnter: true
                     }];
                     try {
-                        console.log(`🐞 Executing transferCallWithNCCO to reconnect customer...`);
+                        console.log(`🐞 Reconnecting customer via transferCallWithNCCO...`);
                         await vonage.voice.transferCallWithNCCO(session.customerLegId, resumeNcco);
-                        console.log(`✅ Customer leg ${session.customerLegId} resumed.`);
+                        console.log(`✅ Customer reconnection initiated.`);
                     } catch (err) {
-                        console.error(`❌ Failed to resume customer leg:`, err.message);
+                        console.error(`❌ Failed to reconnect customer:`, err.message);
                     }
                 }
                 delete consultationSessions[targetConfId];
             }
         }
 
-        // 応答時の処理（isTransferLeg でない場合のみ = オペレーターの主レグのみ）
-        if (status === 'answered' && direction === 'outbound' && userId && !isTransferLeg) {
-            console.log(`🐞 updateOperatorStatus to In-Call for ${userId}`);
-            await updateOperatorStatus(targetConfId, req.body.from || '', '通話中', userId);
-        }
-        // 通話終了時の処理（isTransferLeg でない場合のみ）
-        if (status === 'completed' && userId && !isTransferLeg) {
-            console.log(`🐞 updateOperatorStatus to Available for ${userId}`);
-            // CRM に渡す ID も正規化済みの targetConfId を使用
-            await updateOperatorStatus(targetConfId, '', '待受中', userId);
+        // --- オペレーターのステータス管理 (CRM連携) ---
+        // ※ isTransferLeg（転送発信レグ）自体のイベントではステータスを動かさない
+        if (activeUserId && !isTransferLeg) {
+            // targetConfId (元の会話ID) か conversation_uuid を使用
+            const crmConvId = targetConfId || conversation_uuid;
+            if (status === 'answered' && direction === 'outbound') {
+                console.log(`🐞 updateOperatorStatus to In-Call for ${activeUserId}`);
+                await updateOperatorStatus(crmConvId, req.body.from || '', '通話中', activeUserId);
+            } else if (status === 'completed') {
+                console.log(`🐞 updateOperatorStatus to Available for ${activeUserId}`);
+                await updateOperatorStatus(crmConvId, '', '待受中', activeUserId);
+            }
         }
         res.sendStatus(200);
     } catch (e) {
+        console.error('🐞 onEvent Error:', e.message);
         next(e);
     }
 });
@@ -760,6 +752,7 @@ app.post('/transfer', async (req, res, next) => {
         consultationSessions[confName] = {
             customerLegId,
             operatorLegId,
+            operatorUserId: operator_user_id, // 後のイベントでの復元用
             transferLegId: null, // 発信後に確定させる
             isConsulting: true
         };
