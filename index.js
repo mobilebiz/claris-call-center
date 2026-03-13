@@ -308,7 +308,7 @@ app.post('/onEvent', async (req, res, next) => {
         const session = consultationSessions[targetConf];
 
         if (session && status === 'completed') {
-            console.log(`🐞 Consultation session event detected: ${status} on leg ${uuid}`);
+            console.log(`🐞 Consultation event: status=${status}, uuid=${uuid}, session.customerLegId=${session.customerLegId}`);
             
             if (uuid === session.customerLegId) {
                 // 1. お客様が切断した場合 -> 全員切断
@@ -322,29 +322,35 @@ app.post('/onEvent', async (req, res, next) => {
             else if (uuid === session.operatorLegId || uuid === session.transferLegId) {
                 // 2. オペレーターまたは転送先が切断した場合 -> 残った方をお客様と繋ぐ
                 const remainingLegId = (uuid === session.operatorLegId) ? session.transferLegId : session.operatorLegId;
-                console.log(`🐞 Consultant/Operator disconnected. Connecting customer ${session.customerLegId} to remaining leg ${remainingLegId}`);
+                console.log(`🐞 Consultant/Operator disconnected. UUID: ${uuid}, Remaining: ${remainingLegId}`);
                 
-                if (session.customerLegId) {
-                    // お客様の保留を解除（NCCOを更新して保留音なしの会議に参加させる）
-                    const resumeNcco = [{ action: 'conversation', name: targetConf }];
+                if (session.customerLegId && remainingLegId) {
+                    console.log(`🐞 Reconnecting customer ${session.customerLegId} to remaining leg ${remainingLegId}`);
+                    // お客様の保留を解除（NCCOを更新。会議室名に CONF- を付与して一意性を確保）
+                    const resumeNcco = [{ 
+                        action: 'conversation', 
+                        name: `CONF-${targetConf}`,
+                        startConferenceOnEnter: true
+                    }];
                     try {
                         await vonage.voice.transferCallWithNCCO(session.customerLegId, resumeNcco);
-                        console.log(`🐞 Customer leg ${session.customerLegId} resumed.`);
+                        console.log(`🐞 Customer leg ${session.customerLegId} resumed into conference CONF-${targetConf}`);
                     } catch (err) {
                         console.error(`🐞 Failed to resume customer leg:`, err.message);
                     }
                 }
+                // 重要: どちらかが切れても相談セッションとしては終了
                 delete consultationSessions[targetConf];
             }
         }
 
-        // 応答時の処理
-        if (status === 'answered' && direction === 'outbound' && userId) {
+        // 応答時の処理（isTransferLeg でない場合のみ = オペレーターの主レグのみ）
+        if (status === 'answered' && direction === 'outbound' && userId && !isTransferLeg) {
             // オペレーターのステータス変更
             await updateOperatorStatus(conversation_uuid, req.body.from || '', '通話中', userId);
         }
-        // 通話終了時の処理
-        if (status === 'completed' && direction === 'outbound' && userId) {
+        // 通話終了時の処理（isTransferLeg でない場合のみ）
+        if (status === 'completed' && direction === 'outbound' && userId && !isTransferLeg) {
             // オペレーターのステータス変更
             await updateOperatorStatus(conversation_uuid, '', '待受中', userId);
         }
@@ -775,12 +781,14 @@ app.post('/transfer', async (req, res, next) => {
         const operatorNcco = [
             {
                 action: 'talk',
-                text: '転送先を呼び出しています。相手先が出るまでこのままお待ちください。',
+                text: '転送先を呼び出しています。そのままお待ちください。',
                 language: 'ja-JP'
             },
             {
                 action: 'conversation',
-                name: confName
+                name: `CONF-${confName}`,
+                startConferenceOnEnter: true,
+                endConferenceOnExit: false
             }
         ];
         await vonage.voice.transferCallWithNCCO(operatorLegId, operatorNcco);
@@ -794,7 +802,9 @@ app.post('/transfer', async (req, res, next) => {
             },
             {
                 action: 'conversation',
-                name: confName
+                name: `CONF-${confName}`,
+                startConferenceOnEnter: true,
+                endConferenceOnExit: true // 転送先が切れたら会議を終了（オペレーター復帰ロジックに繋げる）
             }
         ];
 
