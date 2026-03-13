@@ -580,11 +580,43 @@ async function getCallLegs(conversation_uuid, operator_leg_id_hint, operator_use
             }
         }
 
-        return { operatorLegId, customerLegId };
+        // 5. ビジネス番号（転送時の発信元として使う番号）を抽出
+        // 入力通話（PSTN -> App）なら顧客側の Leg の宛先番号 (to)
+        // 出力通話（App -> PSTN）なら顧客側の Leg の発信元番号 (from)
+        let businessNumber = process.env.VONAGE_NUMBER;
+        const customerCall = calls.find(c => c.uuid === customerLegId);
+        if (customerCall) {
+            const toId = (customerCall.to && customerCall.to.type === 'phone') ? customerCall.to.number : '';
+            const fromId = (customerCall.from && customerCall.from.type === 'phone') ? customerCall.from.number : '';
+            
+            // 顧客番号（通常は日本の携帯や固定電話）ではない方をビジネス番号とするための簡易推論
+            // ここでは toId があればそれを優先し、なければ fromId を使う（インバウンドを優先）
+            // もし両方 PSTN の場合は、toId が着信先番号なのでビジネス番号である可能性が高い
+            businessNumber = toId || fromId || process.env.VONAGE_NUMBER;
+            console.log(`🐞 Extracted Business Number candidates: to=${toId}, from=${fromId} -> Selected: ${businessNumber}`);
+        }
+
+        return { operatorLegId, customerLegId, businessNumber };
     } catch (e) {
         console.error(`🐞 Error in getCallLegs:`, e);
-        return { operatorLegId: null, customerLegId: null };
+        return { operatorLegId: null, customerLegId: null, businessNumber: process.env.VONAGE_NUMBER };
     }
+}
+
+/**
+ * 電話番号を E.164 形式 (+81...) に変換するヘルパー
+ */
+function formatToE164(number) {
+    if (!number) return '';
+    let clean = number.toString().replace(/[\s-]/g, '');
+    if (clean.startsWith('0')) {
+        clean = '81' + clean.slice(1);
+    }
+    if (clean.startsWith('81') && !clean.startsWith('+')) {
+        clean = '+' + clean;
+    }
+    // その他のケース（既に+がついている、または海外番号など）はそのままとする
+    return clean;
 }
 
 /**
@@ -638,8 +670,6 @@ app.post('/hold', async (req, res, next) => {
             await Promise.allSettled(stops);
         }
 
-        // 顧客への再生が試みられた、あるいはアクションが受理されたのであれば、
-        // クライアント側には成功を返し、ボタン表示の切り替えを許可する。
         res.sendStatus(200);
 
     } catch (e) {
@@ -654,8 +684,8 @@ app.post('/transfer', async (req, res, next) => {
     console.log('🐞 /transfer called', req.body);
     try {
         const { conversation_uuid, leg_id, destination_number, operator_user_id } = req.body;
-        // 会話内の全 Leg を取得し、オペレーターと顧客を特定
-        const { customerLegId } = await getCallLegs(conversation_uuid, leg_id, operator_user_id);
+        // 会話内の全 Leg を取得し、オペレーター、顧客、およびビジネス番号を特定
+        const { customerLegId, businessNumber } = await getCallLegs(conversation_uuid, leg_id, operator_user_id);
 
         if (!customerLegId) {
              console.error('Customer Not Found');
@@ -663,7 +693,10 @@ app.post('/transfer', async (req, res, next) => {
              return;
         }
         
-        console.log(`🐞 Transferring call: ${customerLegId} to ${destination_number}`);
+        const finalDest = formatToE164(destination_number);
+        const finalFrom = formatToE164(businessNumber) || process.env.VONAGE_NUMBER;
+
+        console.log(`🐞 Transferring call: ${customerLegId} to ${finalDest} (from: ${finalFrom})`);
         
         // 転送先のNCCOを作成
         const ncco = [
@@ -675,35 +708,21 @@ app.post('/transfer', async (req, res, next) => {
             },
             {
                 action: 'connect',
-                from: process.env.VONAGE_NUMBER,
+                from: finalFrom,
                 eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?userId=${operator_user_id}`],
                 endpoint: [
                     {
                         type: 'phone',
-                        number: destination_number.startsWith('0') 
-                            ? destination_number.replace(/^0/, '81') 
-                            : destination_number
+                        number: finalDest
                     }
                 ]
             }
         ];
 
-        // 宛先番号に '+' が必要な場合に備えた補正
-        if (ncco[1].endpoint[0].number.startsWith('81')) {
-            ncco[1].endpoint[0].number = '+' + ncco[1].endpoint[0].number;
-        }
-
         console.log(`🐞 Sending Transfer NCCO:`, JSON.stringify(ncco, null, 2));
 
         // 転送実行
         await vonage.voice.transferCallWithNCCO(customerLegId, ncco);
-        
-        // オペレーター側の通話を切断する必要があるかどうか？
-        // transferCallWithNCCO は指定したLeg (customer) を新しいNCCOに移動させる。
-        // 元のConversationから引き剥がされるため、オペレーターは一人取り残される形になるはず。
-        // クライアント側で hangup してもらうのが自然だが、サーバー側で切断も可能。
-        // ここではサーバー側でオペレーターも切断する場合は以下を追加：
-        // await vonage.voice.hangupCall(leg_id);
         
         res.sendStatus(200);
 
