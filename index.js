@@ -521,24 +521,55 @@ async function getCustomerLegId(conversation_uuid, operator_leg_id) {
         // 相手側(customer)を特定するのは少しロジックがいります。
         // ここでは、"operator_leg_id ではない" かつ "status が started/ringing" であるものを探します。
 
-        // フィルタリング: conversationUuid が一致するもの
+        // 1. フィルターを使用して検索
         const filter = {
            conversationUuid: conversation_uuid
         };
-        // @vonage/server-sdk v3.x の voice.searchFiles ではなく searchCalls のようなメソッドを探す。
-        // SDKのメソッド名を確認: vonage.voice.searchCalls(filter)
-        
         const page = await vonage.voice.search(filter);
+        
+        let calls = [];
         if (page && page._embedded && page._embedded.calls) {
-            console.log(`🐞 calls found: ${page._embedded.calls.length}`);
-            for (const call of page._embedded.calls) {
-                if (call.uuid !== operator_leg_id) {
-                    console.log(`🐞 Customer leg found: ${call.uuid}`);
-                    return call.uuid;
-                }
+            calls = page._embedded.calls;
+        }
+
+        // 2. 検索で見つからない場合のフォールバック: 全通話から手動フィルタリング
+        if (calls.length === 0) {
+            console.log(`🐞 Search by filter found 0. Trying manual filtering from all active calls...`);
+            const allCallsPage = await vonage.voice.search({ status: 'started' });
+            if (allCallsPage && allCallsPage._embedded && allCallsPage._embedded.calls) {
+                calls = allCallsPage._embedded.calls.filter(c => c.conversationUuid === conversation_uuid || c.uuid === conversation_uuid);
             }
-        } else {
-            console.log(`🐞 No calls found for conversation: ${conversation_uuid}`);
+        }
+
+        // 3. 検索で見つからない場合のフォールバック: ID自体がLeg IDである可能性をチェック
+        if (calls.length === 0) {
+            console.log(`🐞 Still 0 found. Checking if ${conversation_uuid} is a direct Leg ID...`);
+            try {
+                const directCall = await vonage.voice.getCall(conversation_uuid);
+                if (directCall) {
+                    console.log(`🐞 ${conversation_uuid} is a direct Leg ID.`);
+                    // これが operator_leg_id でないなら、これが顧客の Leg ID
+                    if (directCall.uuid !== operator_leg_id) return directCall.uuid;
+                    
+                    // これが operator_leg_id なら、同じ会話の別の Leg を探す
+                    const convId = directCall.conversationUuid;
+                    const convPage = await vonage.voice.search({ conversationUuid: convId });
+                    if (convPage && convPage._embedded && convPage._embedded.calls) {
+                        const other = convPage._embedded.calls.find(c => c.uuid !== operator_leg_id);
+                        if (other) return other.uuid;
+                    }
+                }
+            } catch (err) {
+                console.log(`🐞 ${conversation_uuid} is not a valid Leg ID.`);
+            }
+        }
+
+        console.log(`🐞 Total candidate calls found: ${calls.length}`);
+        for (const call of calls) {
+            if (call.uuid !== operator_leg_id) {
+                console.log(`🐞 Customer leg detected: ${call.uuid}`);
+                return call.uuid;
+            }
         }
         return null;
     } catch (e) {
