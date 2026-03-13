@@ -58,41 +58,36 @@
         }
         console.log(`🐞 userId: ${userId} phone: ${phone}`);
 
-        // JWTの取得
+        // JWTの取得 (中略・既存のjwt取得ロジックは維持)
         const response = await fetch(`./getToken?name=${userId}`);
         if (!response.ok) throw new Error(`Token fetch failed: ${response.status}`);
         const data = await response.json();
         const jwt = data.jwt;
   
-        // セッションの作成 (await するよう変更)
-        console.log("🐞 Creating session...");
-        await client.createSession(jwt);
-        console.log("🐞 Session created successfully.");
+        // --- イベントリスナーの登録をセッション作成の前に行う ---
+        console.log("🐞 Registering event listeners...");
 
         // コールステータスのイベントリスナー
         client.on('legStatusUpdate', (callId, legId, status) => {
           console.log(`🐞 Leg status update: ${status}, callId: ${callId}, legId: ${legId}`);
           
-          // 自分のセッションに紐づく Leg ID の場合のみ、currentLegId を更新する
-          // Vonage Client SDK では、client.session.legs に自分の Leg ID がキーとして存在する
           if (client.session && client.session.legs && client.session.legs[legId]) {
               currentLegId = legId;
-              console.log(`🐞 currentLegId updated to (mine from event): ${currentLegId}`);
+              console.log(`🐞 currentLegId updated to (mine): ${currentLegId}`);
           }
 
-          if (status === 'RINGING') { // 呼び出し中
+          if (status === 'RINGING') {
             btnCall.hidden = true;
             btnHangup.innerHTML = '呼び出し中...';
             btnHangup.hidden = false;
           }
-          if (status === 'ANSWERED') {  // 相手が応答した
+          if (status === 'ANSWERED') {
             btnHangup.innerHTML = '切断';
-            // 通話確立したが、最初は保留ボタンのみ表示（転送は保留中のみ）
             btnHold.hidden = false;
             inputTransfer.hidden = true;
             btnTransfer.hidden = true;
           }
-          if (status === 'COMPLETED') { // 通話が終了
+          if (status === 'COMPLETED') {
             if (phone) {
               btnCall.disabled = false;
               btnCall.innerHTML = '発信';
@@ -100,66 +95,61 @@
             }
             btnHangup.hidden = true;
             btnHangup.innerHTML = '切断';
-            
-            // 通話終了したので保留・転送UIを非表示
             btnHold.hidden = true;
             inputTransfer.hidden = true;
             btnTransfer.hidden = true;
-            btnHold.innerHTML = '保留'; // リセット
+            btnHold.innerHTML = '保留';
             btnHold.classList.remove('bg-yellow-400');
             btnHold.classList.add('bg-gray-400');
           }
         });
 
-
-        // 通話が切断されたときのイベントリスナー
+        // 通話が切断されたとき
         client.on('callHangup', (callId, callQuality, reason) => {
-          console.log('🐞 Call ended');
+          console.log(`🐞 Call ended. reason: ${reason}`);
           if (phone) {
             btnCall.disabled = false;
             btnCall.innerHTML = '発信';
             btnCall.hidden = false;
           }
           btnHangup.hidden = true;
-          btnHangup.innerHTML = '切断';
-          
-          // 通話終了したので保留・転送UIを非表示
           btnHold.hidden = true;
           inputTransfer.hidden = true;
           btnTransfer.hidden = true;
-          btnHold.innerHTML = '保留'; // リセット
-          btnHold.classList.remove('bg-yellow-400');
-          btnHold.classList.add('bg-gray-400');
         });
 
-        // 着信したときのイベントリスナー
+        // 着信したとき
         client.on('callInvite', async (callId) => {
-          console.log(`🐞 Incoming call. Session check:`, client.session);
-          // await wait(1000); // 1秒待機(FileMaker対策)
+          console.log(`🐞 Incoming call: ${callId}`);
           currentCall = callId;
           btnCall.disabled = true;
           btnCall.hidden = true;
           btnInvite.disabled = false;
           btnInvite.hidden = false;
-          ringtone.loop = true; // ループ再生   
-          ringtone.play();  // 着信音を再生
+          ringtone.loop = true;
+          ringtone.play(); 
         });
 
-        // 着信がキャンセルされたときのイベントリスナー
+        // 着信キャンセル
         client.on('callInviteCancel', (callId) => {
-          console.log(`🐞 Call invite canceled.`)
-          ringtone.pause();  // 着信音を停止
-          ringtone.currentTime = 0; // 再生位置をリセット
+          console.log(`🐞 Call invite canceled: ${callId}`);
+          ringtone.pause();
+          ringtone.currentTime = 0;
+          btnInvite.hidden = true;
           if (phone) {
             btnCall.disabled = false;
-            btnCall.innerHTML = '発信';
             btnCall.hidden = false;
           }
-          btnInvite.hidden = true;
         });
+
+        // セッションの作成 (await する)
+        console.log("🐞 Creating session...");
+        const sessionId = await client.createSession(jwt);
+        console.log(`🐞 Session created successfully: ${sessionId}`);
         
       } catch (error) {
-        console.error(`🐞 Error: ${error.message}`)                  
+        console.error(`🐞 Initialization Error: ${error.message}`);
+        alert(`初期化エラー: ${error.message}`);
       }
     }
 
