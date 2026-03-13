@@ -613,9 +613,9 @@ app.post('/hold', async (req, res, next) => {
             console.log(`🐞 Streaming audio to: ${streamUrl}`);
             
             const streams = [];
-            if (leg_id) {
-                console.log(`🐞 Starting stream to operator: ${leg_id}`);
-                streams.push(vonage.voice.streamAudio(leg_id, streamUrl, 0));
+            if (finalOperatorId) {
+                console.log(`🐞 Starting stream to operator: ${finalOperatorId}`);
+                streams.push(vonage.voice.streamAudio(finalOperatorId, streamUrl, 0));
             }
             if (customerLegId) {
                 console.log(`🐞 Starting stream to customer: ${customerLegId}`);
@@ -623,17 +623,16 @@ app.post('/hold', async (req, res, next) => {
             }
 
             try {
-                // 片方が失敗しても（例：operator_leg_id が未定義で404になっても）、もう片方の再生を試みる
                 await Promise.allSettled(streams);
                 console.log(`🐞 Audio stream requests processed.`);
             } catch (err) {
                 console.error(`🐞 Critical error during streamAudio:`, err.message);
             }
         } else if (action === 'unhold') {
-            console.log(`🐞 Unholding calls: operator=${leg_id}, customer=${customerLegId}`);
+            console.log(`🐞 Unholding calls: operator=${finalOperatorId}, customer=${customerLegId}`);
             
             const stops = [];
-            if (leg_id) stops.push(vonage.voice.stopStreamAudio(leg_id).catch(e => console.log(`🐞 Stop operator stream failed: ${e.message}`)));
+            if (finalOperatorId) stops.push(vonage.voice.stopStreamAudio(finalOperatorId).catch(e => console.log(`🐞 Stop operator stream failed: ${e.message}`)));
             if (customerLegId) stops.push(vonage.voice.stopStreamAudio(customerLegId).catch(e => console.log(`🐞 Stop customer stream failed: ${e.message}`)));
             
             await Promise.allSettled(stops);
