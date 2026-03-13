@@ -76,12 +76,20 @@
           console.log(`🐞 Leg status update: ${status}, callId: ${callId}, legId: ${legId}`);
           
           // 自分のセッションに紐づく Leg ID の場合のみ、currentLegId を更新する
-          // これにより、顧客側の Leg ID が流れてきた時に上書きされるのを防ぐ
-          if (client.session && client.session.legs && client.session.legs[legId]) {
-              currentLegId = legId;
-              console.log(`🐞 currentLegId updated to (mine): ${currentLegId}`);
-          } else {
-              console.log(`🐞 Leg ID ${legId} belongs to another party. Skipping update.`);
+          // Vonage Client SDK では、client.session.legs に自分の Leg ID がキーとして存在する
+          if (client.session && client.session.legs) {
+              const myLegs = Object.keys(client.session.legs);
+              if (myLegs.includes(legId)) {
+                  currentLegId = legId;
+                  console.log(`🐞 currentLegId updated to (mine): ${currentLegId}`);
+              } else {
+                  console.log(`🐞 Leg ID ${legId} belongs to another party or is not in session yet.`);
+                  // もし currentLegId がまだ空なら、このタイミングで session から拾っておく
+                  if (!currentLegId && myLegs.length > 0) {
+                      currentLegId = myLegs[0];
+                      console.log(`🐞 currentLegId initialized from session: ${currentLegId}`);
+                  }
+              }
           }
 
           if (status === 'RINGING') { // 呼び出し中

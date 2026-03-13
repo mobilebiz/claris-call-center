@@ -597,27 +597,34 @@ app.post('/hold', async (req, res, next) => {
 
         if (action === 'hold') {
             console.log(`🐞 Holding calls: operator=${leg_id}, customer=${customerLegId}`);
-            // 両方の Leg をミュート（任意。音を流すだけなら不要な場合もあるが、マイク音を遮断するために必要）
-            // await vonage.voice.updateCall(leg_id, { action: 'hold' }); 
-            // await vonage.voice.updateCall(customerLegId, { action: 'hold' });
-
-            // 両方に保留音を再生
-            const streamUrl = `${process.env.VCR_INSTANCE_PUBLIC_URL}/hold_music.mp3`;
-            console.log(`🐞 Streaming audio to both: ${streamUrl}`);
             
-            // 並列で音声ストリームを開始
-            await Promise.all([
-                vonage.voice.streamAudio(leg_id, streamUrl, 0),
-                vonage.voice.streamAudio(customerLegId, streamUrl, 0)
-            ]);
+            const streamUrl = `${process.env.VCR_INSTANCE_PUBLIC_URL}/hold_music.mp3`;
+            console.log(`🐞 Streaming audio to: ${streamUrl}`);
+            
+            const streams = [];
+            if (leg_id) {
+                console.log(`🐞 Starting stream to operator: ${leg_id}`);
+                streams.push(vonage.voice.streamAudio(leg_id, streamUrl, 0));
+            }
+            if (customerLegId) {
+                console.log(`🐞 Starting stream to customer: ${customerLegId}`);
+                streams.push(vonage.voice.streamAudio(customerLegId, streamUrl, 0));
+            }
+
+            try {
+                await Promise.all(streams);
+            } catch (err) {
+                console.error(`🐞 Error during streamAudio:`, err.message);
+                // 片方が失敗しても、もう片方が成功している可能性があるので続行
+            }
         } else if (action === 'unhold') {
             console.log(`🐞 Unholding calls: operator=${leg_id}, customer=${customerLegId}`);
             
-            // 両方の音声ストリームを停止
-            await Promise.all([
-                vonage.voice.stopStreamAudio(leg_id),
-                vonage.voice.stopStreamAudio(customerLegId)
-            ]);
+            const stops = [];
+            if (leg_id) stops.push(vonage.voice.stopStreamAudio(leg_id).catch(e => console.log(`🐞 Stop operator stream failed: ${e.message}`)));
+            if (customerLegId) stops.push(vonage.voice.stopStreamAudio(customerLegId).catch(e => console.log(`🐞 Stop customer stream failed: ${e.message}`)));
+            
+            await Promise.all(stops);
         }
 
         res.sendStatus(200);
