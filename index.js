@@ -352,9 +352,10 @@ app.post('/onEvent', async (req, res, next) => {
             // オペレーターのステータス変更
             await updateOperatorStatus(conversation_uuid, req.body.from || '', '通話中', userId);
         }
-        // 通話終了時の処理（isTransferLeg でない場合のみ）
-        if (status === 'completed' && direction === 'outbound' && userId && !isTransferLeg) {
-            // オペレーターのステータス変更
+        // 通話終了時の処理（isTransferLeg でない場合のみ = オペレーターの主レグのみ）
+        if (status === 'completed' && userId && !isTransferLeg) {
+            // オペレーターのステータス変更（方向を問わず切断時は待受に戻す）
+            console.log(`🐞 updateOperatorStatus to Available for ${userId}`);
             await updateOperatorStatus(conversation_uuid, '', '待受中', userId);
         }
         res.sendStatus(200);
