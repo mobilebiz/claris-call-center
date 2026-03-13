@@ -680,10 +680,10 @@ app.post('/transfer', async (req, res, next) => {
         ];
 
         // 転送実行
-        await vonage.voice.transferCallWithNcco(customerLegId, ncco);
+        await vonage.voice.transferCallWithNCCO(customerLegId, ncco);
         
         // オペレーター側の通話を切断する必要があるかどうか？
-        // transferCallWithNcco は指定したLeg (customer) を新しいNCCOに移動させる。
+        // transferCallWithNCCO は指定したLeg (customer) を新しいNCCOに移動させる。
         // 元のConversationから引き剥がされるため、オペレーターは一人取り残される形になるはず。
         // クライアント側で hangup してもらうのが自然だが、サーバー側で切断も可能。
         // ここではサーバー側でオペレーターも切断する場合は以下を追加：

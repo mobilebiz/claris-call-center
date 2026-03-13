@@ -320,7 +320,8 @@
             const body = {
                 conversation_uuid: currentCall,
                 leg_id: currentLegId,
-                destination_number: destination
+                destination_number: destination,
+                operator_user_id: userId
             };
 
             const response = await fetch('./transfer', {
