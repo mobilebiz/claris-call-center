@@ -339,12 +339,12 @@ app.post('/onEvent', async (req, res, next) => {
         }
 
         // 応答時の処理
-        if (status === 'answered' && direction === 'outbound') {
+        if (status === 'answered' && direction === 'outbound' && userId) {
             // オペレーターのステータス変更
             await updateOperatorStatus(conversation_uuid, req.body.from || '', '通話中', userId);
         }
         // 通話終了時の処理
-        if (status === 'completed' && direction === 'outbound') {
+        if (status === 'completed' && direction === 'outbound' && userId) {
             // オペレーターのステータス変更
             await updateOperatorStatus(conversation_uuid, '', '待受中', userId);
         }
