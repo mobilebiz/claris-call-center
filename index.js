@@ -5,6 +5,7 @@ import expressWs from 'express-ws';
 import cors from 'cors';
 import axios from 'axios';
 import fs from 'fs';
+import util from 'util';
 
 const app = express();
 const router = express.Router();
@@ -70,7 +71,6 @@ app.post('/getKana', async (req, res, next) => {
     } catch (e) {
         next(e);
     }
-    res.sendStatus(200);
 });
 
 /**
@@ -179,8 +179,8 @@ const updateOperatorStatus = async (conversationId, incomingNumber, status, user
         }
         const data = {
             Status: status,
-            IncomingNumber: incomingNumber.replace(/^\+?81/, '0'),
-            Conversation_uuid: conversationId
+            IncomingNumber: status === '待受中' ? '' : incomingNumber.replace(/^\+?81/, '0'),
+            Conversation_uuid: status === '待受中' ? '' : conversationId
         }
         await axios.patch(`${CLARIS_SERVER}/Operator_Status?$filter=UserID eq '${userId}'`, data, { headers });
         return true;
@@ -323,7 +323,7 @@ app.post('/onEvent', async (req, res, next) => {
                     
                     const resumeNcco = [{ 
                         action: 'conversation', 
-                        name: `CONF-${targetConfId}`,
+                        name: `${targetConfId}`,
                         startConferenceOnEnter: true
                     }];
                     try {
@@ -352,17 +352,32 @@ app.post('/onEvent', async (req, res, next) => {
             }
         }
 
+        // 転送先レグ (B-leg or Outbound leg) が応答した際の UUID 記録
+        if (isTransferLeg === 'true' && status === 'answered') {
+            if (consultationSessions[confName]) {
+                consultationSessions[confName].transferLegId = uuid;
+                console.log(`🐞 Captured transferLegId for ${confName}: ${uuid}`);
+            }
+        }
+
         // --- オペレーターのステータス管理 (CRM連携) ---
-        // ※ isTransferLeg（転送発信レグ）自体のイベントではステータスを動かさない
-        if (activeUserId && !isTransferLeg) {
-            // targetConfId (元の会話ID) か conversation_uuid を使用
-            const crmConvId = targetConfId || conversation_uuid;
-            if (status === 'answered' && direction === 'outbound') {
+        if (activeUserId) {
+            // CRM連携には本来の会話UUID(conversation_uuid)を一貫して使用する
+            const crmConvId = conversation_uuid;
+            
+            if (status === 'ringing') {
+                console.log(`🐞 updateOperatorStatus to Ringing for ${activeUserId}`);
+                await updateOperatorStatus(crmConvId, req.body.from || '', '着信中', activeUserId);
+                // ログデータの開始記録 (App間転送などのため)
+                await putQueue({ conversation_uuid: crmConvId, from: req.body.from, to: req.body.to }, 'CALLING');
+            } else if (status === 'answered' && direction === 'outbound') {
                 console.log(`🐞 updateOperatorStatus to In-Call for ${activeUserId}`);
                 await updateOperatorStatus(crmConvId, req.body.from || '', '通話中', activeUserId);
             } else if (status === 'completed') {
                 console.log(`🐞 updateOperatorStatus to Available for ${activeUserId}`);
                 await updateOperatorStatus(crmConvId, '', '待受中', activeUserId);
+                // ログデータの完了記録
+                await putQueue({ conversation_uuid: crmConvId, from: req.body.from, to: req.body.to }, 'COMPLETED');
             }
         }
         res.sendStatus(200);
@@ -706,11 +721,11 @@ app.post('/hold', async (req, res, next) => {
             
             const streams = [];
             if (finalOperatorId) {
-                console.log(`🐞 Starting stream to operator: ${finalOperatorId}`);
+                console.log(`🐞 Starting API stream to operator: ${finalOperatorId}`);
                 streams.push(vonage.voice.streamAudio(finalOperatorId, streamUrl, 0));
             }
             if (customerLegId) {
-                console.log(`🐞 Starting stream to customer: ${customerLegId}`);
+                console.log(`🐞 Starting API stream to customer: ${customerLegId}`);
                 streams.push(vonage.voice.streamAudio(customerLegId, streamUrl, 0));
             }
 
@@ -724,8 +739,20 @@ app.post('/hold', async (req, res, next) => {
             console.log(`🐞 Unholding calls: operator=${finalOperatorId}, customer=${customerLegId}`);
             
             const stops = [];
-            if (finalOperatorId) stops.push(vonage.voice.stopStreamAudio(finalOperatorId).catch(e => console.log(`🐞 Stop operator stream failed: ${e.message}`)));
-            if (customerLegId) stops.push(vonage.voice.stopStreamAudio(customerLegId).catch(e => console.log(`🐞 Stop customer stream failed: ${e.message}`)));
+            if (finalOperatorId) {
+                stops.push(
+                    vonage.voice.stopStreamAudio(finalOperatorId)
+                        .then(() => console.log(`✅ Stopped operator stream: ${finalOperatorId}`))
+                        .catch(e => console.log(`🐞 Stop operator stream failed: ${e.message}`))
+                );
+            }
+            if (customerLegId) {
+                stops.push(
+                    vonage.voice.stopStreamAudio(customerLegId)
+                        .then(() => console.log(`✅ Stopped customer stream: ${customerLegId}`))
+                        .catch(e => console.log(`🐞 Stop customer stream failed: ${e.message}`))
+                );
+            }
             
             await Promise.allSettled(stops);
         }
@@ -753,11 +780,21 @@ app.post('/transfer', async (req, res, next) => {
              return;
         }
 
-        const confName = conversation_uuid; // 会議名は Conversation ID を流用
-        const finalDest = formatToE164(destination_number);
+
+        
+        // 宛先タイプの自動判別 (数字・記号のみなら phone, それ以外 [アルファベット等] は app)
+        const isPhone = /^[0-9+.\-\s]+$/.test(destination_number);
+        const destType = isPhone ? 'phone' : 'app';
+        console.log(`🐞 Transfer Destination Type: ${destType} for "${destination_number}"`);
+
+        const finalDest = isPhone ? formatToE164(destination_number) : destination_number;
         const finalFrom = formatToE164(businessNumber) || process.env.VONAGE_NUMBER;
 
-        console.log(`🐞 Starting Consultative Transfer: conv=${confName}, customer=${customerLegId}, operator=${operatorLegId}`);
+        // 会議名は Conversation ID の末尾 10 文字程度 + 接頭辞で 40 文字制限を守る
+        const confId = conversation_uuid.split('-').pop() || 'room';
+        const confName = `C-${confId}`; 
+        
+        console.log(`🐞 Starting Consultative Transfer: conv=${confName}, customer=${customerLegId}, operator=${operatorLegId}, type=${destType}`);
 
         // 状態の記録
         consultationSessions[confName] = {
@@ -799,7 +836,7 @@ app.post('/transfer', async (req, res, next) => {
             },
             {
                 action: 'conversation',
-                name: `CONF-${confName}`,
+                name: `${confName}`,
                 startConferenceOnEnter: true,
                 endConferenceOnExit: false
             }
@@ -815,24 +852,81 @@ app.post('/transfer', async (req, res, next) => {
             },
             {
                 action: 'conversation',
-                name: `CONF-${confName}`,
+                name: `${confName}`,
                 startConferenceOnEnter: true,
                 endConferenceOnExit: true // 転送先が切れたら会議を終了（オペレーター復帰ロジックに繋げる）
             }
         ];
 
+        if (destType === 'app') {
+            // App 宛の場合は createOutboundCall が "Type APP is not supported" で失敗するため、
+            // オペレーター自身を connect NCCO で転送先に繋ぐワークアラウンドを使用する。
+            console.log(`🐞 [Workaround] Calling App user via NCCO Connect: ${operatorLegId} -> ${finalDest}`);
+            const operatorConnectNcco = [
+                {
+                    action: 'talk',
+                    text: '転送先を呼び出しています。そのままお待ちください。',
+                    language: 'ja-JP'
+                },
+                {
+                    action: 'connect',
+                    from: finalFrom.replace(/^\+/, ''),
+                    endpoint: [{ type: 'app', user: finalDest }],
+                    // 宛先レグ (B-leg) の状態を管理するために、userId は転送先 (finalDest) を指定する
+                    eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?userId=${encodeURIComponent(finalDest)}&isTransferLeg=true&confName=${encodeURIComponent(confName)}`]
+                },
+                // 接続が終了した（宛先が切った）場合、あるいは失敗した場合、オペレーターを再度会議室（お客様待機場所）へ移動させる準備
+                {
+                    action: 'conversation',
+                    name: `${confName}`,
+                    startConferenceOnEnter: true
+                }
+            ];
+
+            try {
+                await vonage.voice.transferCallWithNCCO(operatorLegId, operatorConnectNcco);
+                res.sendStatus(200);
+            } catch (err) {
+                console.error(`🐞 App transfer connect workaround failed:`, err.message);
+                res.status(500).send('Failed to initiate app connection');
+            }
+            return;
+        }
+
+        // --- 外線（PSTN）宛ての場合は従来通り createOutboundCall を使用 ---
         try {
+            const endpoint = { type: 'phone', number: finalDest };
+            const fromObject = { type: 'phone', number: finalFrom.replace(/^\+/, '') };
+            
+            console.log(`🐞 Outbound Call Request (PSTN):`, {
+                to: [endpoint],
+                from: fromObject,
+                confName
+            });
+
             const result = await vonage.voice.createOutboundCall({
-                to: [{ type: 'phone', number: finalDest }],
-                from: { type: 'phone', number: finalFrom },
+                to: [endpoint],
+                from: fromObject,
                 ncco: inviteNcco,
-                eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?userId=${operator_user_id}&isTransferLeg=true&confName=${confName}`]
+                eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?isTransferLeg=true&confName=${encodeURIComponent(confName)}`]
             });
             console.log(`🐞 Outbound call to ${finalDest} initiated: uuid=${result.uuid}`);
             consultationSessions[confName].transferLegId = result.uuid;
         } catch (err) {
-            console.error(`🐞 Failed to initiate outbound call:`, err.message);
-            // 発信失敗時はお客様を元に戻すなどの処理が必要だが、一旦エラーを返す
+            console.error(`🐞 --- OUTBOUND CALL FAILED (PSTN) ---`);
+            console.error(`🐞 Error Message:`, err.message);
+            
+            if (err.response) {
+                console.error(`🐞 [Response Found] status:`, err.response.status);
+                if (typeof err.response.text === 'function') {
+                    try {
+                        const bodyText = await err.response.text();
+                        console.error(`🐞 [Response Body Text]:`, bodyText);
+                    } catch (e) {}
+                } else {
+                    console.error(`🐞 [Response Data]:`, util.inspect(err.response.data, { depth: null, colors: false }));
+                }
+            }
             res.status(500).send('Failed to dial destination');
             return;
         }
@@ -890,10 +984,13 @@ app.post('/cancelTransfer', async (req, res, next) => {
 
         // 2. お客様を通常の会議（保留音なし）に引き戻す
         if (session.customerLegId) {
-            console.log(`🐞 Reconnecting customer ${session.customerLegId} to operator`);
+            console.log(`🐞 Reconnecting customer ${session.customerLegId} to operator (and stopping any streams)`);
+            // API経由のストリームも念のため停止
+            await vonage.voice.stopStreamAudio(session.customerLegId).catch(() => {});
+            
             const resumeNcco = [{ 
                 action: 'conversation', 
-                name: `CONF-${confId}`,
+                name: `${confId}`,
                 startConferenceOnEnter: true
             }];
             await vonage.voice.transferCallWithNCCO(session.customerLegId, resumeNcco);
@@ -903,6 +1000,43 @@ app.post('/cancelTransfer', async (req, res, next) => {
     } catch (e) {
         console.error('🐞 /cancelTransfer Error:', e.message);
         res.status(500).send(e.message);
+    }
+});
+
+/**
+ * ユーザー一覧を取得するエンドポイント（転送先の選択用）
+ * FileMaker ODataから待受中のオペレーター一覧を取得します
+ */
+app.get('/api/users', async (req, res, next) => {
+    try {
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Basic ${BASIC_AUTH}`
+        }
+        
+        // FileMakerから待受中のオペレーター一覧を取得
+        const response = await axios.get(
+            `${CLARIS_SERVER}/Operator_Status?$top=100&$select=UserID,Status&$filter=Status eq '待受中'&$orderby=LastCallTime asc`,
+            { headers }
+        );
+        
+        const operators = response.data.value || [];
+        
+        // 転送に必要な name（ユーザーID）と表示用の display_name を抽出して返す
+        const userList = operators.map(op => ({
+            name: op.UserID,
+            displayName: op.UserID
+        }));
+        
+        res.json(userList);
+    } catch (e) {
+        console.error('Error fetching FileMaker users:', e.message);
+        if (e.response) {
+            console.error(e.response.data);
+            res.status(e.response.status).send(e.response.data);
+        } else {
+            res.status(500).send(e.message);
+        }
     }
 });
 

@@ -39,10 +39,91 @@
 
 3. Claris FileMaker連携
    - 顧客情報の取得（フリガナ情報）
-   - キューイングデータの管理
-   - オペレーターのステータス管理
+   - キューイングデータの管理（履歴保存、完了ステータスの更新）
+   - オペレーターのステータス管理（待受中・着信中・通話中のリアルタイム同期）
 
-## シーケンス図
+## 詳細な通話フロー
+
+システムの主要な通話制御フローについて説明します。
+
+### 1. 通話保留・解除フロー
+
+オペレーターがお客様との通話を一時的に保留し、保留音を流すフローです。
+
+```mermaid
+sequenceDiagram
+    participant O as オペレーター (Web)
+    participant S as サーバー (index.js)
+    participant V as Vonage API
+    participant C as お客様
+
+    Note over O,C: 通話中 (Active Call)
+    O->>S: POST /hold (action: 'hold')
+    S->>S: consultationSessions に状態を記録
+    S->>V: お客様 Leg を保留用 NCCO (stream) へ転送
+    V-->>C: 保留音の再生開始
+    S-->>O: 200 OK (UI: 「保留」→「再開」へ変更)
+
+    Note over O,C: 保留中 (On Hold)
+
+    O->>S: POST /hold (action: 'unhold')
+    S->>V: お客様 Leg を元の通話/会議へ戻す
+    V-->>C: 保留音の停止
+    S-->>O: 200 OK (UI: 「再開」→「保留」へ戻る)
+    Note over O,C: 通話再開
+```
+
+### 2. 相談転送（Warm Transfer）フロー
+
+お客様を保留にした状態で転送先と相談し、その後「完全転送」または「転送キャンセル（復帰）」を行うフローです。
+
+```mermaid
+sequenceDiagram
+    participant O as オペレーター (Web)
+    participant S as サーバー (index.js)
+    participant V as Vonage API
+    participant C as お客様
+    participant T as 転送先
+
+    Note over O,C: 通話中 (Active Call)
+    O->>S: 「保留」ボタンをクリック
+    S->>V: お客様を保留 NCCO へ移動
+    Note over C: 保留音を聴取開始
+
+    O->>S: 転送先番号を入力して「転送」をクリック
+    S->>S: 宛先が App（オペレーター）か PSTN（外線）か判別
+    
+    alt 宛先が App の場合 (NCCO Connect Workaround)
+        S->>V: オペレーターを connect NCCO で転送先へ直接接続
+        Note over O,T: 直接接続による相談開始
+    else 宛先が PSTN の場合 (Standard Outbound)
+        S->>V: オペレーターを専用会議室 (CONF-XXX) へ移動
+        S->>V: 転送先へ発信 (Outbound Call)
+        T->>V: 応答
+        V-->>T: 会議室 (CONF-XXX) へ参加
+    end
+    Note over O,T: オペレーターと転送先の相談中 (お客様には聞こえない)
+
+    alt 転送完了 (オペレーターが離脱)
+        O->>S: 「切断」ボタンをクリック
+        S->>V: オペレーター Leg を切断
+        V->>S: Event: completed
+        Note over S: 残り Leg が 2つ (お客様 & 転送先) であることを検知
+        S->>V: お客様を保留解除して会議室 (CONF-XXX) へ合流
+        Note over C,T: お客様と転送先の通話開始
+    else 転送キャンセル (お客様へ戻る)
+        O->>S: 転送を中断して「再開」をクリック
+        S->>S: POST /cancelTransfer
+        S->>V: 転送先 Leg を強制切断 (Hangup)
+        S->>V: お客様を保留解除して会議室 (CONF-XXX) へ戻す
+        Note over O,C: オペレーターとお客様の通話復旧
+    end
+```
+
+#### チェーン切断（Chain Hangup）について
+このシステムでは、転送完了後にお客様または転送先のどちらかが電話を切った際、残された一方が「一人で通話中」の状態にならないよう、自動的に残りのレグを切断する制御（連鎖切断）を実装しています。
+
+## シーケンス図（簡易版）
 
 ![Sequence](images/Sequence.png)
 
@@ -142,9 +223,28 @@ Vonage Cloud Runtimeへのデプロイについての詳細は、[デプロイ�
 - `POST /onEventRecorded`: 録音完了時の処理
 - `POST /onEventTranscribed`: 音声認識完了時の処理
 
+### 相談・転送関連
+
+- `POST /hold`: 通話の保留・再開（action: 'hold' or 'unhold'）
+- `POST /transfer`: 相談転送の開始（App宛て/PSTN宛ての自動判別）
+- `POST /cancelTransfer`: 転送のキャンセルとお客様への復帰
+
 ### ユーティリティ
 
 - `POST /getKana`: 電話番号から顧客のフリガナを取得
+- `GET /api/users`: FileMaker から待受中のオペレーター一覧を取得
 - `GET /getToken`: WebRTC用のJWTトークンを取得
 - `GET /_/health`: ヘルスチェック
 - `GET /_/metrics`: メトリクス取得
+
+## 運用上の注意・トラブルシューティング
+
+### ステータス管理の仕様
+オペレーターのステータス（待受中・通話中など）は、Vonage のイベントと連動して FileMaker 側の `Operator_Status` テーブルを PATCH 更新します。
+- **着信/呼出中**: `Status` を「着信中」に更新
+- **応答**: `Status` を「通話中」に更新
+- **切断/完了**: `Status` を「待受中」に更新し、同時に `IncomingNumber` と `Conversation_uuid` を空文字でクリアします。
+
+### よくあるエラー
+- **ERR_NGROK_3004**: ngrok ゲートウェイが不正な HTTP レスポンスを検知した際のエラーです。原因として、サーバー側での「多重レスポンス送信（res.json と res.sendStatus の重複など）」や、処理のクラッシュが挙げられます。
+- **Type APP is not supported**: Vonage の一部の API エンドポイントで App ユーザーへの直接発信が制限されている際のエラーです。本システムでは `transfer` と `connect` NCCO を組み合わせたワークアラウンドでこれを回避しています。

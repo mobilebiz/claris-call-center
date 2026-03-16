@@ -13,7 +13,8 @@
             <button id="btnInvite" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="invite()">着信中...</button>
             <button id="btnHangup" class="text-white font-bold bg-red-400 p-2 rounded" hidden onclick="hangup()">切断</button>
         <button id="btnHold" class="text-white font-bold bg-gray-400 p-2 rounded" hidden onclick="toggleHold()">保留</button>
-        <input id="inputTransfer" type="text" class="border p-2 rounded" placeholder="転送先番号" hidden />
+        <input id="inputTransfer" type="text" class="border p-2 rounded" placeholder="転送先番号 または ユーザー" list="userList" hidden />
+        <datalist id="userList"></datalist>
         <button id="btnTransfer" class="text-white font-bold bg-green-400 p-2 rounded" hidden onclick="transferCall()">転送</button>
     </div>
   </div>
