@@ -140,6 +140,8 @@ const putQueue = async (body, status = 'ENQUEUE') => {
 
 /**
  * オペレーターのピックアップ
+ * 待受中のオペレーターから LastCallTime 昇順で 1 名を選定する。
+ * 並行して、診断目的で全オペレーターの状態スナップショットをログに残す（失敗しても選定処理に影響させない）。
  * @returns {Promise<string>} オペレーターのユーザーID
  */
 const pickupOperator = async () => {
@@ -149,13 +151,34 @@ const pickupOperator = async () => {
             'Content-Type': 'application/json',
             'Authorization': `Basic ${BASIC_AUTH}`
         }
-        const response = await axios.get(
+
+        // 1) 選定本処理: 従来通り絞り込み済みクエリ。100 件上限の影響を受けず、確実に先頭の待受中を返す。
+        const selectResp = await axios.get(
             `${CLARIS_SERVER}/Operator_Status?$top=1&$select=UserID&$filter=Status eq '待受中'&$orderby=LastCallTime asc`,
             { headers }
         );
-        console.dir(response.data);
-        const value = response.data.value || [];
-        return value[0] ? value[0].UserID : '';
+        const picked = selectResp.data?.value?.[0]?.UserID || '';
+
+        // 2) 診断ログ: 全件スナップショット。Issue 2 切り分け用なので失敗しても選定は止めない。
+        try {
+            const snapResp = await axios.get(
+                `${CLARIS_SERVER}/Operator_Status?$top=100&$select=UserID,Status,LastCallTime,IncomingNumber,Conversation_uuid&$orderby=LastCallTime asc`,
+                { headers }
+            );
+            const all = snapResp.data?.value || [];
+            console.log(`🐞 [pickupOperator] snapshot (count=${all.length}):`);
+            for (const op of all) {
+                if (!op) continue;
+                console.log(`   - ${op.UserID} | status=${op.Status} | lastCall=${op.LastCallTime || '-'} | incoming=${op.IncomingNumber || '-'} | convId=${op.Conversation_uuid || '-'}`);
+            }
+            const candidates = all.filter(op => op && op.Status === '待受中');
+            console.log(`🐞 [pickupOperator] candidates(待受中)=${candidates.length}: [${candidates.map(o => o.UserID).join(', ')}]`);
+        } catch (logErr) {
+            console.error(`🐞 [pickupOperator] diagnostic snapshot failed:`, logErr.message);
+        }
+
+        console.log(`🐞 [pickupOperator] selected: ${picked || '(none → announcement)'}`);
+        return picked;
     } catch (e) {
         console.error(e);
         throw e;
