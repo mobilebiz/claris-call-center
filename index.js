@@ -140,6 +140,8 @@ const putQueue = async (body, status = 'ENQUEUE') => {
 
 /**
  * オペレーターのピックアップ
+ * 待受中のオペレーターから LastCallTime 昇順で 1 名を選定する。
+ * 診断目的で全オペレーターの状態スナップショットを毎回ログに残す。
  * @returns {Promise<string>} オペレーターのユーザーID
  */
 const pickupOperator = async () => {
@@ -149,13 +151,23 @@ const pickupOperator = async () => {
             'Content-Type': 'application/json',
             'Authorization': `Basic ${BASIC_AUTH}`
         }
+        // 診断ログ用に全件取得し、サーバー側で待受中だけ抽出する
         const response = await axios.get(
-            `${CLARIS_SERVER}/Operator_Status?$top=1&$select=UserID&$filter=Status eq '待受中'&$orderby=LastCallTime asc`,
+            `${CLARIS_SERVER}/Operator_Status?$top=100&$select=UserID,Status,LastCallTime,IncomingNumber,Conversation_uuid&$orderby=LastCallTime asc`,
             { headers }
         );
-        console.dir(response.data);
-        const value = response.data.value || [];
-        return value[0] ? value[0].UserID : '';
+        const all = response.data.value || [];
+        console.log(`🐞 [pickupOperator] snapshot (count=${all.length}):`);
+        for (const op of all) {
+            console.log(`   - ${op.UserID} | status=${op.Status} | lastCall=${op.LastCallTime || '-'} | incoming=${op.IncomingNumber || '-'} | convId=${op.Conversation_uuid || '-'}`);
+        }
+
+        const candidates = all.filter(op => op.Status === '待受中');
+        console.log(`🐞 [pickupOperator] candidates(待受中)=${candidates.length}: [${candidates.map(o => o.UserID).join(', ')}]`);
+
+        const picked = candidates[0] ? candidates[0].UserID : '';
+        console.log(`🐞 [pickupOperator] selected: ${picked || '(none → announcement)'}`);
+        return picked;
     } catch (e) {
         console.error(e);
         throw e;
