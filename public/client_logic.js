@@ -11,6 +11,8 @@ let userId = '';
 let isCallingOut = false;
 let isTransferring = false;
 let appUsers = [];
+let userListRefreshTimer = null;
+const USER_LIST_REFRESH_INTERVAL_MS = 3000;
 const client = new vonageClientSDK.VonageClient();
 const ringtone = new Audio('./ringtone.mp3');
 
@@ -57,6 +59,11 @@ window.onload = async () => {
   btnHold = document.getElementById('btnHold');
   btnTransfer = document.getElementById('btnTransfer');
   inputTransfer = document.getElementById('inputTransfer');
+
+  // 転送先入力にフォーカスが当たった瞬間にも最新のオペレーター一覧を取得
+  inputTransfer.addEventListener('focus', () => {
+    if (!inputTransfer.hidden) fetchAppUsers();
+  });
 
   let params = new URLSearchParams(decodeURI(location.search));
   params.forEach((value, key) => {
@@ -178,6 +185,7 @@ function resetUI() {
   currentLegId = null;
   isCallingOut = false;
   isTransferring = false;
+  stopUserListAutoRefresh();
 
   if (phone) btnCall.hidden = false;
   btnCall.disabled = false;
@@ -222,6 +230,30 @@ async function fetchAppUsers() {
   }
 }
 
+function startUserListAutoRefresh() {
+  if (userListRefreshTimer) return;
+  console.log(`🐞 Starting user list auto-refresh (every ${USER_LIST_REFRESH_INTERVAL_MS}ms)`);
+  userListRefreshTimer = setInterval(() => {
+    // 転送 UI が表示されており、かつ入力中（フォーカス中）でないときだけ更新
+    // フォーカス中は datalist 再構築でドロップダウンが閉じたりちらつくのを避ける
+    if (
+      inputTransfer &&
+      !inputTransfer.hidden &&
+      document.activeElement !== inputTransfer
+    ) {
+      fetchAppUsers();
+    }
+  }, USER_LIST_REFRESH_INTERVAL_MS);
+}
+
+function stopUserListAutoRefresh() {
+  if (userListRefreshTimer) {
+    console.log(`🐞 Stopping user list auto-refresh`);
+    clearInterval(userListRefreshTimer);
+    userListRefreshTimer = null;
+  }
+}
+
 function restoreActiveCallUI() {
   console.log(`🐞 Restoring active call UI.`);
   isTransferring = false;
@@ -229,6 +261,7 @@ function restoreActiveCallUI() {
   btnHold.classList.replace('bg-yellow-400', 'bg-gray-400');
   inputTransfer.hidden = true;
   btnTransfer.hidden = true;
+  stopUserListAutoRefresh();
 }
 
 async function phoneCall() {
@@ -337,6 +370,8 @@ async function toggleHold() {
         btnHold.classList.add('bg-yellow-400');
         inputTransfer.hidden = false;
         btnTransfer.hidden = false;
+        // 保留中は他オペレーターの状態変化に追従するため一覧を定期更新
+        startUserListAutoRefresh();
       }
     } else {
       const errText = await response.text();
