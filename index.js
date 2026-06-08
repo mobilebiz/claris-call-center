@@ -216,6 +216,10 @@ app.post('/onCall', async (req, res, next) => {
                 updateOperatorStatus(req.body.conversation_uuid, req.body.from, '着信中', userId);
                 // ウェイト処理
                 // await wait(3000);
+                // connect の timeout を秒単位で指定。
+                // CRM 上は待受中だが app endpoint が応答できない（ブラウザ閉、相談転送で実質ビジーなど）状況で、
+                // 顧客が無限呼び出しになるのを防ぎ、未応答時は後続の talk アクションで案内を流す。
+                const CONNECT_TIMEOUT_SEC = 25;
                 res.json([
                     {
                         action: 'record',
@@ -231,10 +235,19 @@ app.post('/onCall', async (req, res, next) => {
                         action: 'connect',
                         eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?userId=${userId}`],
                         from: req.body.from,
+                        timeout: CONNECT_TIMEOUT_SEC,
                         endpoint: [{
                             type: 'app',
                             user: userId
                         }]
+                    },
+                    // connect が応答なし／失敗で抜けた場合のフォールバック案内
+                    {
+                        action: 'talk',
+                        text: '申し訳ございませんが、現在対応できるオペレーターがいません。後ほどおかけ直しください。',
+                        language: 'ja-JP',
+                        voice: 3,
+                        premium: true
                     }
                 ]);
             } else { // オペレーターが見つからなかった場合
