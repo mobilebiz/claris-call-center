@@ -21,6 +21,15 @@ const vonage = new Vonage(
 const CLARIS_SERVER = process.env.CLARIS_SERVER_URL;   // Claris FileMaker ServerのURL
 const BASIC_AUTH = Buffer.from(`${process.env.USER}:${process.env.PASS}`).toString('base64');
 
+// connect アクションの応答待ち秒数。
+// CRM 上は待受中だが app endpoint が応答できない（ブラウザ閉、相談転送中で実質ビジー など）状況で
+// 顧客の呼び出し音が無限に続くのを防ぐためのフォールバック発動タイマー。
+const CONNECT_TIMEOUT_SEC = 25;
+
+// 着信／発信 leg が応答せずに終了したとみなす Vonage status の集合。
+// これらが届いた時点で operator の CRM ステータスを「待受中」に戻す。
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'rejected', 'busy', 'timeout', 'unanswered', 'cancelled']);
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
@@ -216,10 +225,7 @@ app.post('/onCall', async (req, res, next) => {
                 updateOperatorStatus(req.body.conversation_uuid, req.body.from, '着信中', userId);
                 // ウェイト処理
                 // await wait(3000);
-                // connect の timeout を秒単位で指定。
-                // CRM 上は待受中だが app endpoint が応答できない（ブラウザ閉、相談転送で実質ビジーなど）状況で、
-                // 顧客が無限呼び出しになるのを防ぎ、未応答時は後続の talk アクションで案内を流す。
-                const CONNECT_TIMEOUT_SEC = 25;
+                // connect は CONNECT_TIMEOUT_SEC で打ち切り、未応答時は後続 talk へフォールバック
                 res.json([
                     {
                         action: 'record',
@@ -386,8 +392,12 @@ app.post('/onEvent', async (req, res, next) => {
             } else if (status === 'answered' && direction === 'outbound') {
                 console.log(`🐞 updateOperatorStatus to In-Call for ${activeUserId}`);
                 await updateOperatorStatus(crmConvId, req.body.from || '', '通話中', activeUserId);
-            } else if (status === 'completed') {
-                console.log(`🐞 updateOperatorStatus to Available for ${activeUserId}`);
+            } else if (TERMINAL_STATUSES.has(status)) {
+                // completed だけでなく timeout/failed/rejected/busy/unanswered/cancelled も
+                // 終端扱いし、CRM ステータスを待受中に戻す。
+                // 25 秒タイムアウトで connect が抜けた場合、Vonage は completed ではなく
+                // timeout や unanswered を返すことがあるため。
+                console.log(`🐞 updateOperatorStatus to Available for ${activeUserId} (status: ${status})`);
                 await updateOperatorStatus(crmConvId, '', '待受中', activeUserId);
                 // ログデータの完了記録
                 await putQueue({ conversation_uuid: crmConvId, from: req.body.from, to: req.body.to }, 'COMPLETED');
