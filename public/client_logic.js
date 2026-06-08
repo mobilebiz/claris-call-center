@@ -234,8 +234,13 @@ function startUserListAutoRefresh() {
   if (userListRefreshTimer) return;
   console.log(`🐞 Starting user list auto-refresh (every ${USER_LIST_REFRESH_INTERVAL_MS}ms)`);
   userListRefreshTimer = setInterval(() => {
-    // 転送 UI が表示されている間だけ更新
-    if (inputTransfer && !inputTransfer.hidden) {
+    // 転送 UI が表示されており、かつ入力中（フォーカス中）でないときだけ更新
+    // フォーカス中は datalist 再構築でドロップダウンが閉じたりちらつくのを避ける
+    if (
+      inputTransfer &&
+      !inputTransfer.hidden &&
+      document.activeElement !== inputTransfer
+    ) {
       fetchAppUsers();
     }
   }, USER_LIST_REFRESH_INTERVAL_MS);
