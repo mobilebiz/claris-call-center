@@ -26,14 +26,106 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static('public'));
 
-// 相談転送（Warm Transfer）の状態管理用オブジェクト
-// Key: conversation_uuid (Vonage Conversation ID)
-// Value: { customerLegId, operatorLegId, transferLegId, isConsulting: bool }
-const consultationSessions = {};
-
 // --- Vonage 連携初期化 ---
 const session = vcr.createSession();
 const voice = new Voice(session);
+
+// --- 相談転送（Warm Transfer）の状態管理 ---
+// VCR はステートレス構成（複数レプリカ / 再起動 / スケール to ゼロ）のため、
+// プロセスメモリではなく全レプリカで共有される Instance State に保存する。
+//   consult:session:<confName>  … セッション本体
+//                                 { customerLegId, operatorLegId, transferLegId, operatorUserId, isConsulting }
+//   consult:leg:<legId>         … レグ ID → confName の逆引き（onEvent がレグ ID から引くため）
+//   consult:operator:<userId>   … オペレーター ID → confName の逆引き（cancelTransfer 用）
+const state = vcr.getInstanceState();
+const CONSULT_TTL_SECONDS = 4 * 60 * 60;  // 孤児セッションが残り続けないよう TTL を張る
+
+const consultSessionKey = (confName) => `consult:session:${confName}`;
+const consultLegKey = (legId) => `consult:leg:${legId}`;
+const consultOperatorKey = (userId) => `consult:operator:${userId}`;
+const consultLegIds = (c) => [c?.customerLegId, c?.operatorLegId, c?.transferLegId].filter(Boolean);
+
+/**
+ * 相談転送セッションを保存し、逆引きインデックスを張り直す
+ * @param {string} confName - 会議名（セッションのキー）
+ * @param {Object} consultation - 保存するセッション
+ * @param {Object} [previousConsultation] - 直前のセッション。クリアされたレグの逆引きを掃除するために使う
+ */
+const saveConsultationSession = async (confName, consultation, previousConsultation = null) => {
+    await state.set(consultSessionKey(confName), consultation);
+    await state.expire(consultSessionKey(confName), CONSULT_TTL_SECONDS);
+
+    const nextLegs = consultLegIds(consultation);
+    await Promise.all(nextLegs.map(async (legId) => {
+        await state.set(consultLegKey(legId), confName);
+        await state.expire(consultLegKey(legId), CONSULT_TTL_SECONDS);
+    }));
+
+    if (consultation.operatorUserId) {
+        await state.set(consultOperatorKey(consultation.operatorUserId), confName);
+        await state.expire(consultOperatorKey(consultation.operatorUserId), CONSULT_TTL_SECONDS);
+    }
+
+    // クリアされたレグの逆引きを掃除する
+    const staleLegs = consultLegIds(previousConsultation).filter((legId) => !nextLegs.includes(legId));
+    await Promise.all(staleLegs.map((legId) => state.delete(consultLegKey(legId))));
+};
+
+/**
+ * 会議名から相談転送セッションを取得する
+ * @param {string} confName - 会議名
+ * @returns {Promise<Object|null>} セッション。存在しなければ null
+ */
+const getConsultationSession = async (confName) => {
+    if (!confName) return null;
+    return await state.get(consultSessionKey(confName));
+};
+
+/**
+ * 逆引きインデックス経由で相談転送セッションを引く
+ * @param {string} indexKey - 逆引きインデックスのキー
+ * @returns {Promise<{confName: string|null, consultation: Object|null}>}
+ */
+const findConsultationByIndex = async (indexKey) => {
+    const confName = await state.get(indexKey);
+    if (!confName) return { confName: null, consultation: null };
+    const consultation = await getConsultationSession(confName);
+    // 逆引きだけ残ってセッション本体が消えている場合は未検出として扱う
+    return consultation ? { confName, consultation } : { confName: null, consultation: null };
+};
+
+/**
+ * レグ ID から相談転送セッションを引く
+ * @param {string} legId - レグ ID
+ * @returns {Promise<{confName: string|null, consultation: Object|null}>}
+ */
+const findConsultationByLeg = async (legId) => {
+    if (!legId) return { confName: null, consultation: null };
+    return await findConsultationByIndex(consultLegKey(legId));
+};
+
+/**
+ * オペレーターのユーザー ID から相談転送セッションを引く
+ * @param {string} userId - オペレーターのユーザー ID
+ * @returns {Promise<{confName: string|null, consultation: Object|null}>}
+ */
+const findConsultationByOperator = async (userId) => {
+    if (!userId) return { confName: null, consultation: null };
+    return await findConsultationByIndex(consultOperatorKey(userId));
+};
+
+/**
+ * 相談転送セッションと逆引きインデックスをまとめて削除する
+ * @param {string} confName - 会議名
+ * @param {Object} consultation - 削除対象のセッション（逆引きを消すために使う）
+ */
+const deleteConsultationSession = async (confName, consultation) => {
+    await state.delete(consultSessionKey(confName));
+    await Promise.all(consultLegIds(consultation).map((legId) => state.delete(consultLegKey(legId))));
+    if (consultation?.operatorUserId) {
+        await state.delete(consultOperatorKey(consultation.operatorUserId));
+    }
+};
 
 // セッション内で着信があった場合に呼び出す関数を定義
 await voice.onCall('onCall');
@@ -315,34 +407,36 @@ app.post('/onEvent', async (req, res, next) => {
         console.log('🐞 meta:', { userId, isTransferLeg, confName });
 
         // 相談転送（Warm Transfer）の処理
-        // 会話IDは変動するため、自身のレグIDが参加者のいずれかと一致するかでセッションを特定する
-        const sessionEntry = Object.entries(consultationSessions).find(([_, s]) => 
-            s.customerLegId === uuid || s.operatorLegId === uuid || s.transferLegId === uuid
-        );
-        const targetConfId = sessionEntry ? sessionEntry[0] : null;
-        const session = sessionEntry ? sessionEntry[1] : null;
+        // 会話IDは変動するため、自身のレグIDから逆引きインデックス経由でセッションを特定する
+        const { confName: targetConfId, consultation } = await findConsultationByLeg(uuid);
 
         // Fallback: userId がクエリにない場合、セッションから復元
-        const activeUserId = userId || (session ? session.operatorUserId : null);
+        const activeUserId = userId || (consultation ? consultation.operatorUserId : null);
 
-        if (session && status === 'completed') {
-            console.log(`🐞 Consultation session event: uuid=${uuid}, session:`, session);
-            
+        if (consultation && status === 'completed') {
+            console.log(`🐞 Consultation session event: uuid=${uuid}, session:`, consultation);
+
+            // クリア前の状態を控える（消えたレグの逆引きを掃除するために使う）
+            const previousConsultation = { ...consultation };
+
             // 役割ごとのレグIDをクリア
-            if (uuid === session.customerLegId) session.customerLegId = null;
-            if (uuid === session.operatorLegId) session.operatorLegId = null;
-            if (uuid === session.transferLegId) session.transferLegId = null;
+            if (uuid === consultation.customerLegId) consultation.customerLegId = null;
+            if (uuid === consultation.operatorLegId) consultation.operatorLegId = null;
+            if (uuid === consultation.transferLegId) consultation.transferLegId = null;
 
             // 残っているレグをリストアップ
-            const remainingLegs = [session.customerLegId, session.operatorLegId, session.transferLegId].filter(id => !!id);
+            const remainingLegs = consultLegIds(consultation);
             console.log(`🐞 Remaining legs in session count: ${remainingLegs.length}`, remainingLegs);
 
             if (remainingLegs.length === 2) {
                 // 3人から2人になった場合（例：相談開始後にどちらかが切れた、または3人会議からの離脱）
+                // 後続の onEvent が古い状態を読まないよう、レグのクリアを先に永続化する
+                await saveConsultationSession(targetConfId, consultation, previousConsultation);
+
                 // お客様が残っている場合のみ、お客様の保留解除（橋渡し）を行う
-                if (session.customerLegId) {
-                    const remainingMemberLegId = remainingLegs.find(id => id !== session.customerLegId);
-                    console.log(`🐞 STAFF disconnected. Bridging customer ${session.customerLegId} to ${remainingMemberLegId}`);
+                if (consultation.customerLegId) {
+                    const remainingMemberLegId = remainingLegs.find(id => id !== consultation.customerLegId);
+                    console.log(`🐞 STAFF disconnected. Bridging customer ${consultation.customerLegId} to ${remainingMemberLegId}`);
                     
                     const resumeNcco = [{ 
                         action: 'conversation', 
@@ -350,12 +444,12 @@ app.post('/onEvent', async (req, res, next) => {
                         startConferenceOnEnter: true
                     }];
                     try {
-                        await vonage.voice.transferCallWithNCCO(session.customerLegId, resumeNcco);
+                        await vonage.voice.transferCallWithNCCO(consultation.customerLegId, resumeNcco);
                         console.log(`✅ Customer bridging initiated.`);
                     } catch (err) {
                         console.error(`❌ Failed to bridge customer:`, err.message);
                         // 転送失敗時はクリーンアップ
-                        delete consultationSessions[targetConfId];
+                        await deleteConsultationSession(targetConfId, consultation);
                     }
                 }
             } else if (remainingLegs.length === 1) {
@@ -367,18 +461,21 @@ app.post('/onEvent', async (req, res, next) => {
                 } catch (err) {
                     console.error(`❌ Failed to hangup last leg:`, err.message);
                 }
-                delete consultationSessions[targetConfId];
+                await deleteConsultationSession(targetConfId, previousConsultation);
             } else {
                 // 全員終了
                 console.log(`🐞 No legs remain. Cleaning up session.`);
-                delete consultationSessions[targetConfId];
+                await deleteConsultationSession(targetConfId, previousConsultation);
             }
         }
 
         // 転送先レグ (B-leg or Outbound leg) が応答した際の UUID 記録
         if (isTransferLeg === 'true' && status === 'answered') {
-            if (consultationSessions[confName]) {
-                consultationSessions[confName].transferLegId = uuid;
+            const pendingConsultation = await getConsultationSession(confName);
+            if (pendingConsultation) {
+                const previousConsultation = { ...pendingConsultation };
+                pendingConsultation.transferLegId = uuid;
+                await saveConsultationSession(confName, pendingConsultation, previousConsultation);
                 console.log(`🐞 Captured transferLegId for ${confName}: ${uuid}`);
             }
         }
@@ -819,14 +916,15 @@ app.post('/transfer', async (req, res, next) => {
         
         console.log(`🐞 Starting Consultative Transfer: conv=${confName}, customer=${customerLegId}, operator=${operatorLegId}, type=${destType}`);
 
-        // 状態の記録
-        consultationSessions[confName] = {
+        // 状態の記録（全レプリカで共有される Instance State へ）
+        const consultation = {
             customerLegId,
             operatorLegId,
             operatorUserId: operator_user_id, // 後のイベントでの復元用
             transferLegId: null, // 発信後に確定させる
             isConsulting: true
         };
+        await saveConsultationSession(confName, consultation);
 
         // 1. まず現在の保留音を止める（念のため）
         await Promise.allSettled([
@@ -934,7 +1032,9 @@ app.post('/transfer', async (req, res, next) => {
                 eventUrl: [`${process.env.VCR_INSTANCE_PUBLIC_URL}/onEvent?isTransferLeg=true&confName=${encodeURIComponent(confName)}`]
             });
             console.log(`🐞 Outbound call to ${finalDest} initiated: uuid=${result.uuid}`);
-            consultationSessions[confName].transferLegId = result.uuid;
+            const previousConsultation = { ...consultation };
+            consultation.transferLegId = result.uuid;
+            await saveConsultationSession(confName, consultation, previousConsultation);
         } catch (err) {
             console.error(`🐞 --- OUTBOUND CALL FAILED (PSTN) ---`);
             console.error(`🐞 Error Message:`, err.message);
@@ -984,39 +1084,37 @@ app.post('/cancelTransfer', async (req, res, next) => {
     console.log(`🐞 /cancelTransfer called: conv=${conversation_uuid}, operator=${operator_user_id}`);
 
     try {
-        const sessionEntry = Object.entries(consultationSessions).find(([_, s]) => 
-            s.operatorUserId === operator_user_id && (s.customerLegId || s.transferLegId)
-        );
+        const { confName: confId, consultation } = await findConsultationByOperator(operator_user_id);
 
-        if (!sessionEntry) {
+        if (!consultation || !(consultation.customerLegId || consultation.transferLegId)) {
             return res.status(404).send('Active consultation session not found');
         }
 
-        const [confId, session] = sessionEntry;
-
         // 1. 転送先のみを切断
-        if (session.transferLegId) {
-            console.log(`🐞 Hanging up transfer leg: ${session.transferLegId}`);
+        if (consultation.transferLegId) {
+            console.log(`🐞 Hanging up transfer leg: ${consultation.transferLegId}`);
             try {
-                await vonage.voice.hangupCall(session.transferLegId);
+                await vonage.voice.hangupCall(consultation.transferLegId);
             } catch (err) {
                 console.warn(`⚠️ Failed to hangup transfer leg: ${err.message}`);
             }
-            session.transferLegId = null;
+            const previousConsultation = { ...consultation };
+            consultation.transferLegId = null;
+            await saveConsultationSession(confId, consultation, previousConsultation);
         }
 
         // 2. お客様を通常の会議（保留音なし）に引き戻す
-        if (session.customerLegId) {
-            console.log(`🐞 Reconnecting customer ${session.customerLegId} to operator (and stopping any streams)`);
+        if (consultation.customerLegId) {
+            console.log(`🐞 Reconnecting customer ${consultation.customerLegId} to operator (and stopping any streams)`);
             // API経由のストリームも念のため停止
-            await vonage.voice.stopStreamAudio(session.customerLegId).catch(() => {});
+            await vonage.voice.stopStreamAudio(consultation.customerLegId).catch(() => {});
             
             const resumeNcco = [{ 
                 action: 'conversation', 
                 name: `${confId}`,
                 startConferenceOnEnter: true
             }];
-            await vonage.voice.transferCallWithNCCO(session.customerLegId, resumeNcco);
+            await vonage.voice.transferCallWithNCCO(consultation.customerLegId, resumeNcco);
         }
 
         res.status(200).send('Transfer canceled and customer reconnected');
