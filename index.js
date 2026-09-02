@@ -32,7 +32,10 @@ app.use(express.static('public'));
 const consultationSessions = {};
 
 // --- Vonage 連携初期化 ---
-const session = vcr.createSession();
+// サブスクリプション登録はインスタンス全体で共有される Global Session を使う。
+// vcr.createSession() をグローバルスコープで呼ぶとレプリカごとに別のランダム ID が
+// 生成され、レプリカ間で状態が到達不能になるため使用しない。
+const session = vcr.getGlobalSession();
 const voice = new Voice(session);
 
 // セッション内で着信があった場合に呼び出す関数を定義
