@@ -469,9 +469,14 @@ app.post('/onEvent', async (req, res, next) => {
 
         // 転送レグはハッシュへの書き込みと逆引きの登録の間に切断されると索引から引けない。
         // その場合は eventUrl に載っている confName から直接引く。
+        //
+        // ただし confName は conversation_uuid から導出されるため、同じ通話で転送をやり直すと
+        // 前回と同じ値になる。キャンセル済み転送レグの遅延 completed が届いた時に confName だけで
+        // セッションを受け入れると、レグを 1 本も消さないまま「残り 2 レグ」と誤判定して
+        // お客様を会議に引き込んでしまう。自分のレグが実際に登録されている場合だけ受け入れる。
         if (!consultation && confName) {
             const fallback = await getConsultationSession(confName);
-            if (fallback) {
+            if (fallback && consultLegIds(fallback).includes(uuid)) {
                 targetConfId = confName;
                 consultation = fallback;
                 console.log(`🐞 Consultation resolved via confName fallback: ${confName}`);
