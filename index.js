@@ -4,7 +4,6 @@ import express from 'express';
 import expressWs from 'express-ws';
 import cors from 'cors';
 import axios from 'axios';
-import fs from 'fs';
 import crypto from 'crypto';
 import util from 'util';
 
@@ -625,30 +624,19 @@ app.post('/onEvent', async (req, res, next) => {
  * @param {string} recording_url - 録音データのURL
  * @returns {Promise<void>}
  */
-async function saveRecordFile(conversation_uuid, recording_url) {
-    return new Promise(async (resolve, reject) => {
-        const jwt = generateJWT();
-        const config = {
-            headers: {
-                Authorization: `Bearer ${jwt}`
-            },
-            responseType: 'stream'
-        };
-        let response = await axios.get(recording_url, config);
-        console.log(`🐞 Recording file stream got.`);
-        const tmp_file_path = `./public/tmp/${conversation_uuid}.mp3`;
-        const writer = fs.createWriteStream(tmp_file_path);
-        response.data.pipe(writer);
-        writer.on('finish', () => {
-            console.log(`🐞 Recording file stream saved.`);
-            resolve();
-        });
-        writer.on('error', (error) => {
-            console.log(error);
-            reject(error);
-        })
-    })
-}
+// --- 録音ファイルの中継 ---
+// VCR はステートレス構成のため、レプリカローカルのディスクに保存できない
+// （保存したレプリカ以外に取得リクエストが来ると 404 になる / 再起動で消える）。
+// そのため保存はせず、取得要求が来た時点で Vonage からストリームで中継する。
+// Vonage の recording_url は conversation_uuid から導出できないので、
+// webhook で受け取った URL と署名用トークンだけを State に持つ。
+//
+// トークンは初回取得で消費する「ワンタイム」ではなく、期限付きの bearer トークン。
+// FM の Insert from URL が失敗してリトライする運用があった場合に取得不能になるのを
+// 避けるため、消費はしない。代わりに TTL を短くして再利用できる窓を絞る。
+// FM は webhook 直後（通常は数秒以内）に取りに来るため、1 時間あれば十分。
+const RECORDING_TTL_SECONDS = 60 * 60;
+const recordingKey = (conversationUuid) => `recording:${conversationUuid}`;
 
 /**
  * 録音終了時のイベントハンドラー
@@ -659,9 +647,18 @@ async function saveRecordFile(conversation_uuid, recording_url) {
 app.post('/onEventRecorded', async (req, res, next) => {
     console.log(`🐞 onEventRecorded called`);
     try {
-        // 録音データの保存
-        await saveRecordFile(req.body.conversation_uuid, req.body.recording_url);
-        const recordingUrl = `${process.env.VCR_INSTANCE_PUBLIC_URL}/tmp/${req.body.conversation_uuid}.mp3`;
+        const conversationUuid = req.body.conversation_uuid;
+
+        // 取得エンドポイントを保護するためのトークン（有効期限は RECORDING_TTL_SECONDS）。
+        // FM 側は URL にクエリが付くだけで、Insert from URL の書き方は変わらない。
+        const token = crypto.randomBytes(32).toString('hex');
+        await state.mapSet(recordingKey(conversationUuid), {
+            recordingUrl: req.body.recording_url,
+            token
+        });
+        await state.expire(recordingKey(conversationUuid), RECORDING_TTL_SECONDS);
+
+        const recordingUrl = `${process.env.VCR_INSTANCE_PUBLIC_URL}/recording/${conversationUuid}.mp3?token=${token}`;
         const headers = {
             'Content-Type': 'application/json',
             'Authorization': `Basic ${BASIC_AUTH}`
@@ -684,6 +681,56 @@ app.post('/onEventRecorded', async (req, res, next) => {
         res.sendStatus(200);
     } catch (e) {
         next(e);
+    }
+});
+
+/**
+ * 録音ファイルの取得（Vonage からのストリーム中継）
+ * ディスクに保存せずそのまま流すため、どのレプリカが受けても同じ結果になる。
+ * @param {Object} req - リクエストオブジェクト
+ * @param {Object} res - レスポンスオブジェクト
+ */
+app.get('/recording/:conversationUuid.mp3', async (req, res) => {
+    const { conversationUuid } = req.params;
+    console.log(`🐞 /recording called for ${conversationUuid}`);
+    try {
+        const entry = await state.mapGetAll(recordingKey(conversationUuid));
+        if (!entry || !entry.token || !entry.recordingUrl) {
+            console.warn(`⚠️ Recording entry not found: ${conversationUuid}`);
+            res.sendStatus(404);
+            return;
+        }
+
+        // トークンはタイミング攻撃を避けるため定数時間で比較する
+        const expected = Buffer.from(entry.token);
+        const provided = Buffer.from(String(req.query.token || ''));
+        if (expected.length !== provided.length || !crypto.timingSafeEqual(expected, provided)) {
+            console.warn(`⚠️ Recording token mismatch: ${conversationUuid}`);
+            res.sendStatus(403);
+            return;
+        }
+
+        // Vonage の録音取得には JWT が必要
+        const upstream = await axios.get(entry.recordingUrl, {
+            headers: { Authorization: `Bearer ${generateJWT()}` },
+            responseType: 'stream'
+        });
+
+        res.setHeader('Content-Type', 'audio/mpeg');
+        if (upstream.headers['content-length']) {
+            res.setHeader('Content-Length', upstream.headers['content-length']);
+        }
+
+        // 全量をバッファせずそのまま流す。FM 側の待ち時間は Vonage の TTFB 程度に収まる
+        upstream.data.on('error', (err) => {
+            console.error(`❌ Recording stream error (${conversationUuid}):`, err.message);
+            res.destroy();
+        });
+        res.on('close', () => upstream.data.destroy());
+        upstream.data.pipe(res);
+    } catch (e) {
+        console.error(`❌ Failed to relay recording ${conversationUuid}:`, e.message);
+        if (!res.headersSent) res.sendStatus(502);
     }
 });
 

@@ -1,5 +1,6 @@
 node_modules/
 vcr.yml
-public/tmp/*.mp3
 .agent/
 debug_output.log
+# 旧実装(ローカル保存)の残骸。現在はストリーム中継のため生成されない
+public/tmp/
