@@ -44,6 +44,8 @@ const voice = new Voice(session);
 const state = vcr.getInstanceState();
 // 通話中はステート更新が走らないため、TTL は「機能上の打ち切り」ではなく
 // 取りこぼしたセッションを回収するための保険として、想定通話時間より十分長く取る。
+// 24 時間を超える通話は業務上発生しないため、ハートビートによる TTL 更新は導入しない
+// （定期処理という故障点を増やす方がリスクが大きいという判断）。
 const CONSULT_TTL_SECONDS = 24 * 60 * 60;
 const CONSULT_LEG_FIELDS = ['customerLegId', 'operatorLegId', 'transferLegId'];
 
@@ -116,6 +118,15 @@ const setConsultationLeg = async (confName, field, legId) => {
  * @param {string} legId - クリアするレグ ID
  */
 const clearConsultationLeg = async (confName, field, legId) => {
+    // 読み取り後にレグが差し替わっている（転送リトライ等）場合、新しいレグの登録を
+    // 消さないよう現在値を確認してから削除する。State API に CAS がないため完全な
+    // 原子性はないが、競合の窓を 1 往復ぶんに狭められる。
+    const currentLegId = await state.mapGetValue(consultSessionKey(confName), field);
+    if (currentLegId && currentLegId !== legId) {
+        console.log(`🐞 Skip clearing ${field}: already replaced by ${currentLegId} (was ${legId})`);
+        await state.delete(consultLegKey(legId));
+        return;
+    }
     await state.mapDelete(consultSessionKey(confName), [field]);
     await state.delete(consultLegKey(legId));
 };
@@ -162,14 +173,15 @@ const deleteConsultationSession = async (confName, consultation) => {
     await state.delete(consultSessionKey(confName));
     await Promise.all(consultLegIds(consultation).map((legId) => state.delete(consultLegKey(legId))));
 
-    // オペレーター ID は通話をまたいで再利用されるため、無条件には消せない。
-    // 同じオペレーターが次の相談転送を始めていると逆引きは新しい会議を指しており、
-    // それを消すと新しい方の /cancelTransfer が 404 になる。
-    const userId = consultation?.operatorUserId;
-    if (userId) {
-        const indexed = await state.get(consultOperatorKey(userId));
-        if (indexed === confName) await state.delete(consultOperatorKey(userId));
-    }
+    // オペレーターの逆引きは意図的に消さない。
+    // オペレーター ID は通話をまたいで再利用されるため、同じオペレーターが次の相談転送を
+    // 始めていると索引は既に新しい会議を指している。ここで消すと新しい方の
+    // /cancelTransfer が 404 になる。「読み取り → 比較 → 削除」にしても 2 往復ある以上
+    // その競合は残るので、削除自体をやめるのが確実。
+    // 取り残された索引は findConsultationByIndex がセッション本体の不在を見て未検出として
+    // 扱い、TTL で自然に消える。
+    // レグ ID は通話ごとに一意で再利用されないため、こちらは上で削除して問題ない
+    // （重複 webhook に対する冪等性の担保にもなる）。
 };
 
 // セッション内で着信があった場合に呼び出す関数を定義
@@ -453,7 +465,18 @@ app.post('/onEvent', async (req, res, next) => {
 
         // 相談転送（Warm Transfer）の処理
         // 会話IDは変動するため、自身のレグIDから逆引きインデックス経由でセッションを特定する
-        const { confName: targetConfId, consultation } = await findConsultationByLeg(uuid);
+        let { confName: targetConfId, consultation } = await findConsultationByLeg(uuid);
+
+        // 転送レグはハッシュへの書き込みと逆引きの登録の間に切断されると索引から引けない。
+        // その場合は eventUrl に載っている confName から直接引く。
+        if (!consultation && confName) {
+            const fallback = await getConsultationSession(confName);
+            if (fallback) {
+                targetConfId = confName;
+                consultation = fallback;
+                console.log(`🐞 Consultation resolved via confName fallback: ${confName}`);
+            }
+        }
 
         // Fallback: userId がクエリにない場合、セッションから復元
         const activeUserId = userId || (consultation ? consultation.operatorUserId : null);
