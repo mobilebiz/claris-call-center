@@ -70,6 +70,16 @@ const setConsultationLegIndex = async (legId, confName) => {
  * @param {Object} consultation - 作成するセッション
  */
 const createConsultationSession = async (confName, consultation) => {
+    // confName は conversation_uuid から導出されるため、同じ通話で転送をやり直すと
+    // 再利用される。mapSet は HSET でマージなので、前回のセッションが残っていると
+    // 古い transferLegId を持ち越し、その遅延 completed で誤判定を招く。
+    // 先に前回分を索引ごと破棄しておく。
+    const previous = await getConsultationSession(confName);
+    if (previous) {
+        console.log(`🐞 Replacing stale consultation session ${confName}`);
+        await deleteConsultationSession(confName, previous);
+    }
+
     const fields = {};
     for (const [key, value] of Object.entries(consultation)) {
         // ハッシュの値は文字列のみ。未確定のレグはフィールドごと持たせない
@@ -116,6 +126,7 @@ const setConsultationLeg = async (confName, field, legId) => {
  * @param {string} confName - 会議名
  * @param {string} field - クリアするフィールド名（CONSULT_LEG_FIELDS のいずれか）
  * @param {string} legId - クリアするレグ ID
+ * @returns {Promise<boolean>} 実際にクリアしたら true、既に差し替わっていたら false
  */
 const clearConsultationLeg = async (confName, field, legId) => {
     // 読み取り後にレグが差し替わっている（転送リトライ等）場合、新しいレグの登録を
@@ -125,10 +136,11 @@ const clearConsultationLeg = async (confName, field, legId) => {
     if (currentLegId && currentLegId !== legId) {
         console.log(`🐞 Skip clearing ${field}: already replaced by ${currentLegId} (was ${legId})`);
         await state.delete(consultLegKey(legId));
-        return;
+        return false;
     }
     await state.mapDelete(consultSessionKey(confName), [field]);
     await state.delete(consultLegKey(legId));
+    return true;
 };
 
 /**
@@ -492,18 +504,25 @@ app.post('/onEvent', async (req, res, next) => {
             // 自分のレグだけをフィールド単位で消す。複数レグが同時に completed になっても
             // 他レプリカの更新を巻き戻さない
             const clearedField = CONSULT_LEG_FIELDS.find((field) => consultation[field] === uuid);
-            if (clearedField) {
-                await clearConsultationLeg(targetConfId, clearedField, uuid);
+            // 自分のレグが既に別のレグへ置き換わっていた場合、このイベントは現在の
+            // セッションの状態を表していない。残レグ判定に進むと、生きているセッションを
+            // 誤って破棄したりお客様を会議に引き込んだりするため、ここで打ち切る。
+            const cleared = clearedField
+                ? await clearConsultationLeg(targetConfId, clearedField, uuid)
+                : false;
+
+            if (!cleared) {
+                console.log(`🐞 Leg ${uuid} is not part of the current session state. Skipping session cleanup.`);
             }
 
             // クリア後の最新状態を読み直す（他レプリカの更新も反映された状態で判断する）
-            const current = await getConsultationSession(targetConfId);
+            const current = cleared ? await getConsultationSession(targetConfId) : null;
             const remainingLegs = consultLegIds(current);
             console.log(`🐞 Remaining legs in session count: ${remainingLegs.length}`, remainingLegs);
 
             if (!current) {
-                // 他レプリカが既にクリーンアップ済み
-                console.log(`🐞 Session already cleaned up by another replica.`);
+                // クリアできなかった（レグが置き換わっていた）か、他レプリカが
+                // 既にクリーンアップ済み。どちらの場合も状態判断はしない
             } else if (remainingLegs.length === 2) {
                 // 3人から2人になった場合（例：相談開始後にどちらかが切れた、または3人会議からの離脱）
                 // お客様が残っている場合のみ、お客様の保留解除（橋渡し）を行う
@@ -535,10 +554,14 @@ app.post('/onEvent', async (req, res, next) => {
                     console.error(`❌ Failed to hangup last leg:`, err.message);
                 }
                 await deleteConsultationSession(targetConfId, current);
-            } else {
+            } else if (remainingLegs.length === 0) {
                 // 全員終了
                 console.log(`🐞 No legs remain. Cleaning up session.`);
                 await deleteConsultationSession(targetConfId, current);
+            } else {
+                // 3 レグ以上。並行して新しいレグが登録された等の想定外の状態なので、
+                // 生きているセッションを壊さないよう何もしない
+                console.warn(`⚠️ Unexpected leg count ${remainingLegs.length} for ${targetConfId}. Leaving session intact.`);
             }
         }
 
