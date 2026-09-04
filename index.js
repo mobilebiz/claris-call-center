@@ -5,6 +5,7 @@ import expressWs from 'express-ws';
 import cors from 'cors';
 import axios from 'axios';
 import fs from 'fs';
+import crypto from 'crypto';
 import util from 'util';
 
 const app = express();
@@ -37,6 +38,10 @@ const voice = new Voice(session);
 //                                 { customerLegId, operatorLegId, transferLegId, operatorUserId, isConsulting }
 //   consult:leg:<legId>         … レグ ID → confName の逆引き（onEvent がレグ ID から引くため）
 //   consult:operator:<userId>   … オペレーター ID → confName の逆引き（cancelTransfer 用）
+//   consult:conversation:<uuid> … 通話 → 現在の confName（転送やり直し時に前回分を破棄するため）
+//
+// confName は転送試行ごとに一意（/transfer で生成）。同じ通話で転送をやり直しても
+// キーが衝突しないため、前回の試行のレグや遅延イベントが現在のセッションに混入しない。
 //
 // セッション本体をハッシュにしているのは、レグのクリアを「フィールド単位の削除 (HDEL)」で
 // 原子的に行うため。JSON 一括の read-modify-write だと、複数レグがほぼ同時に completed に
@@ -52,6 +57,7 @@ const CONSULT_LEG_FIELDS = ['customerLegId', 'operatorLegId', 'transferLegId'];
 const consultSessionKey = (confName) => `consult:session:${confName}`;
 const consultLegKey = (legId) => `consult:leg:${legId}`;
 const consultOperatorKey = (userId) => `consult:operator:${userId}`;
+const consultConversationKey = (conversationUuid) => `consult:conversation:${conversationUuid}`;
 const consultLegIds = (c) => CONSULT_LEG_FIELDS.map((field) => c?.[field]).filter(Boolean);
 
 /**
@@ -66,18 +72,23 @@ const setConsultationLegIndex = async (legId, confName) => {
 
 /**
  * 相談転送セッションを新規に作成し、逆引きインデックスを張る
- * @param {string} confName - 会議名（セッションのキー）
+ * @param {string} confName - 会議名（セッションのキー）。転送試行ごとに一意
  * @param {Object} consultation - 作成するセッション
+ * @param {string} conversationUuid - 通話 ID。前回の試行を破棄するために使う
  */
-const createConsultationSession = async (confName, consultation) => {
-    // confName は conversation_uuid から導出されるため、同じ通話で転送をやり直すと
-    // 再利用される。mapSet は HSET でマージなので、前回のセッションが残っていると
-    // 古い transferLegId を持ち越し、その遅延 completed で誤判定を招く。
-    // 先に前回分を索引ごと破棄しておく。
-    const previous = await getConsultationSession(confName);
-    if (previous) {
-        console.log(`🐞 Replacing stale consultation session ${confName}`);
-        await deleteConsultationSession(confName, previous);
+const createConsultationSession = async (confName, consultation, conversationUuid) => {
+    // 同じ通話で転送をやり直すと、前回の試行のセッションが残る。confName が一意なので
+    // 単純な上書きでは消えず、古い転送レグの遅延 completed がその古いセッションに当たると
+    // 既に誰もいない会議室へお客様を引き込んでしまう。会話単位の索引から辿って破棄する。
+    const previousConfName = conversationUuid
+        ? await state.get(consultConversationKey(conversationUuid))
+        : null;
+    if (previousConfName) {
+        const previous = await getConsultationSession(previousConfName);
+        if (previous) {
+            console.log(`🐞 Discarding previous consultation session ${previousConfName}`);
+            await deleteConsultationSession(previousConfName, previous);
+        }
     }
 
     const fields = {};
@@ -85,6 +96,9 @@ const createConsultationSession = async (confName, consultation) => {
         // ハッシュの値は文字列のみ。未確定のレグはフィールドごと持たせない
         if (value !== null && value !== undefined) fields[key] = String(value);
     }
+    // mapSet は HSET なので既存フィールドにマージされる。同じキーに残骸があった場合に
+    // 古いレグ（特に transferLegId）を持ち越さないよう、書く前に必ず消しておく。
+    await state.delete(consultSessionKey(confName));
     await state.mapSet(consultSessionKey(confName), fields);
     await state.expire(consultSessionKey(confName), CONSULT_TTL_SECONDS);
 
@@ -93,6 +107,11 @@ const createConsultationSession = async (confName, consultation) => {
     if (consultation.operatorUserId) {
         await state.set(consultOperatorKey(consultation.operatorUserId), confName);
         await state.expire(consultOperatorKey(consultation.operatorUserId), CONSULT_TTL_SECONDS);
+    }
+
+    if (conversationUuid) {
+        await state.set(consultConversationKey(conversationUuid), confName);
+        await state.expire(consultConversationKey(conversationUuid), CONSULT_TTL_SECONDS);
     }
 };
 
@@ -482,10 +501,9 @@ app.post('/onEvent', async (req, res, next) => {
         // 転送レグはハッシュへの書き込みと逆引きの登録の間に切断されると索引から引けない。
         // その場合は eventUrl に載っている confName から直接引く。
         //
-        // ただし confName は conversation_uuid から導出されるため、同じ通話で転送をやり直すと
-        // 前回と同じ値になる。キャンセル済み転送レグの遅延 completed が届いた時に confName だけで
-        // セッションを受け入れると、レグを 1 本も消さないまま「残り 2 レグ」と誤判定して
-        // お客様を会議に引き込んでしまう。自分のレグが実際に登録されている場合だけ受け入れる。
+        // confName は転送試行ごとに一意なので、前回の試行のイベントがここに混入することは
+        // 本来ない（前回分は createConsultationSession が破棄済み）。それでも多重防御として、
+        // 自分のレグが実際に登録されているセッションだけを受け入れる。
         if (!consultation && confName) {
             const fallback = await getConsultationSession(confName);
             if (fallback && consultLegIds(fallback).includes(uuid)) {
@@ -1004,9 +1022,12 @@ app.post('/transfer', async (req, res, next) => {
         const finalDest = isPhone ? formatToE164(destination_number) : destination_number;
         const finalFrom = formatToE164(businessNumber) || process.env.VONAGE_NUMBER;
 
-        // 会議名は Conversation ID の末尾 10 文字程度 + 接頭辞で 40 文字制限を守る
+        // 会議名は Conversation ID の末尾 + 転送試行ごとのランダム接尾辞。
+        // 同じ通話で転送をやり直しても前回と別の会議・別のセッションキーになるため、
+        // 前回の試行のレグや遅延イベントが現在のセッションに混入しない。
+        // 長さは "C-" + 12 + "-" + 6 = 21 文字で、会議名の 40 文字制限に収まる。
         const confId = conversation_uuid.split('-').pop() || 'room';
-        const confName = `C-${confId}`; 
+        const confName = `C-${confId}-${crypto.randomBytes(3).toString('hex')}`; 
         
         console.log(`🐞 Starting Consultative Transfer: conv=${confName}, customer=${customerLegId}, operator=${operatorLegId}, type=${destType}`);
 
@@ -1018,7 +1039,7 @@ app.post('/transfer', async (req, res, next) => {
             transferLegId: null, // 発信後に確定させる
             isConsulting: true
         };
-        await createConsultationSession(confName, consultation);
+        await createConsultationSession(confName, consultation, conversation_uuid);
 
         // 1. まず現在の保留音を止める（念のため）
         await Promise.allSettled([
