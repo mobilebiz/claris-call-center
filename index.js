@@ -997,6 +997,54 @@ app.post('/hold', async (req, res, next) => {
 });
 
 /**
+ * 相談転送の開始に失敗した際の巻き戻し
+ *
+ * /transfer はお客様を保留 NCCO へ移した後に、オペレーターの会議室移動や
+ * 転送先の呼び出しを行う。後段が失敗すると、お客様は保留音を聞かされたまま
+ * 誰とも繋がらない状態で取り残されていた。
+ * ここでお客様とオペレーターを会議室で再度引き合わせ、セッションを破棄する。
+ *
+ * 巻き戻し自体が失敗しても元のエラー応答を妨げないよう、例外は投げない。
+ *
+ * @param {string} confName - 会議名
+ * @param {Object} consultation - 破棄する相談転送セッション
+ */
+const rollbackTransfer = async (confName, consultation) => {
+    const { customerLegId, operatorLegId } = consultation;
+    console.log(`🐞 Rolling back transfer ${confName}: reuniting customer=${customerLegId} operator=${operatorLegId}`);
+
+    const resumeNcco = [{
+        action: 'conversation',
+        name: `${confName}`,
+        startConferenceOnEnter: true
+    }];
+
+    // 片方が既に切れていても、もう片方の復帰は試みる
+    await Promise.allSettled([
+        vonage.voice.stopStreamAudio(customerLegId),
+        vonage.voice.stopStreamAudio(operatorLegId)
+    ]);
+    const results = await Promise.allSettled([
+        vonage.voice.transferCallWithNCCO(customerLegId, resumeNcco),
+        vonage.voice.transferCallWithNCCO(operatorLegId, resumeNcco)
+    ]);
+    results.forEach((result, i) => {
+        const legId = i === 0 ? customerLegId : operatorLegId;
+        if (result.status === 'rejected') {
+            console.warn(`⚠️ Rollback failed for leg ${legId}: ${result.reason?.message}`);
+        } else {
+            console.log(`✅ Rollback moved leg ${legId} back to ${confName}`);
+        }
+    });
+
+    try {
+        await deleteConsultationSession(confName, consultation);
+    } catch (err) {
+        console.warn(`⚠️ Rollback failed to delete session ${confName}: ${err.message}`);
+    }
+};
+
+/**
  * 転送機能のエンドポイント（相談転送 / Warm Transfer）
  */
 app.post('/transfer', async (req, res, next) => {
@@ -1061,7 +1109,16 @@ app.post('/transfer', async (req, res, next) => {
                 loop: 0
             }
         ];
-        await vonage.voice.transferCallWithNCCO(customerLegId, customerNcco);
+        try {
+            await vonage.voice.transferCallWithNCCO(customerLegId, customerNcco);
+        } catch (err) {
+            // この時点ではお客様はまだ元の通話にいる。通話には手を触れず、
+            // 記録したセッションだけ破棄する
+            console.error(`🐞 Failed to place customer on hold:`, err.message);
+            await deleteConsultationSession(confName, consultation);
+            res.status(500).send('Failed to place customer on hold');
+            return;
+        }
 
         // 3. オペレーターを会議室へ移動
         const operatorNcco = [
@@ -1077,7 +1134,15 @@ app.post('/transfer', async (req, res, next) => {
                 endConferenceOnExit: false
             }
         ];
-        await vonage.voice.transferCallWithNCCO(operatorLegId, operatorNcco);
+        try {
+            await vonage.voice.transferCallWithNCCO(operatorLegId, operatorNcco);
+        } catch (err) {
+            console.error(`🐞 Failed to move operator to conference:`, err.message);
+            // お客様は既に保留 NCCO へ移っているため、取り残さないよう引き戻す
+            await rollbackTransfer(confName, consultation);
+            res.status(500).send('Failed to move operator to conference');
+            return;
+        }
 
         // 4. 転送先へ発信（応答時に会議室へ参加させる）
         const inviteNcco = [
@@ -1124,6 +1189,8 @@ app.post('/transfer', async (req, res, next) => {
                 res.sendStatus(200);
             } catch (err) {
                 console.error(`🐞 App transfer connect workaround failed:`, err.message);
+                // お客様は既に保留 NCCO へ移っているため、取り残さないよう引き戻す
+                await rollbackTransfer(confName, consultation);
                 res.status(500).send('Failed to initiate app connection');
             }
             return;
@@ -1163,6 +1230,8 @@ app.post('/transfer', async (req, res, next) => {
                     console.error(`🐞 [Response Data]:`, util.inspect(err.response.data, { depth: null, colors: false }));
                 }
             }
+            // お客様は既に保留 NCCO へ移っているため、取り残さないよう引き戻す
+            await rollbackTransfer(confName, consultation);
             res.status(500).send('Failed to dial destination');
             return;
         }
